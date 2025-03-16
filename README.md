@@ -1,11 +1,14 @@
 # Twitch Gemini Translator
 
-TwitchのチャットコメントをリアルタイムでGoogle Gemini 2.0 Flash APIを使って日本語に翻訳するChrome拡張機能です。
+Twitchのチャットコメントをリアルタイムで翻訳するChrome拡張機能です。Chrome組み込みの翻訳機能とGoogle Gemini 2.0 Flash APIを使い分け、高品質な翻訳を実現します。
 
 ## 機能
 
 - Twitchチャット内の英語（または非日本語）コメントをリアルタイムで検出
-- Google Gemini 2.0 Flash APIを使用した自然な日本語翻訳
+- **デュアル翻訳エンジンシステム**
+  - Chrome組み込み翻訳API: APIキー不要、オフライン動作可能
+  - Google Gemini 2.0 Flash API: 高品質な文脈考慮の翻訳、幅広い言語サポート
+- 翻訳エンジンの自動選択機能
 - 翻訳結果をオリジナルコメントの下に表示
 - 拡張機能の有効/無効を切り替え可能
 - 複数の翻訳モード（選択的翻訳、すべて翻訳、英語のみ翻訳）
@@ -26,17 +29,25 @@ TwitchのチャットコメントをリアルタイムでGoogle Gemini 2.0 Flash
 
 1. Chrome拡張機能のアイコンをクリックしてポップアップを表示
 2. 「設定」ボタンをクリック
-3. Google AI StudioでGemini APIキーを取得し、設定ページに入力
+3. 翻訳エンジンの選択
+   - **Chrome組み込み翻訳**のみを使用する場合はAPIキー不要
+   - **Gemini API**を使用する場合は、Google AI StudioでAPIキーを取得して入力
+   - **自動選択**（推奨）を選択すると、利用可能な最適な翻訳エンジンを自動選択
 4. 必要に応じて翻訳モードや表示設定をカスタマイズ
 5. 「保存」ボタンをクリック
 6. ポップアップからトグルスイッチをオンにして翻訳機能を有効化
 
 ## 使用方法
 
-1. Twitchの配信ページに移動
-2. 拡張機能が自動的にチャットを監視し、設定に基づいて翻訳を表示
+### Chrome組み込み翻訳を使用する場合
 
-## APIキーの取得方法
+1. Chromeで `chrome://flags/#translation-api` を開く
+2. 「有効」を選択
+3. Chromeを再起動
+4. Twitchの配信ページに移動
+5. 拡張機能が自動的にチャットを監視し、設定に基づいて翻訳を表示
+
+### Gemini APIキーの取得方法（オプション）
 
 1. [Google AI Studio](https://ai.google.dev/)にアクセス
 2. Googleアカウントでログイン（必要に応じて新規作成）
@@ -67,7 +78,15 @@ TwitchのチャットコメントをリアルタイムでGoogle Gemini 2.0 Flash
 - JavaScript (ES6+)
 - Chrome Extension API
 - MutationObserver API
+- Chrome組み込み翻訳API (Translation API)
 - Google Gemini 2.0 Flash API
+
+### 特記事項
+
+- Chrome組み込み翻訳機能を使用するには、Chromeフラグの有効化が必要です。
+- Chrome組み込み翻訳はオフライン動作が可能で、プライバシー保護に優れていますが、言語ペアのサポートが制限される場合があります。
+- Gemini APIは高品質な翻訳と幅広い言語サポートを提供しますが、APIキーが必要です。
+- デュアル翻訳エンジンシステムでは、一方が失敗した場合に自動的に他方にフォールバックします。
 
 ## ライセンス
 

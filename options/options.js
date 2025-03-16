@@ -43,7 +43,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     useCache: true,
     maxCacheAge: 24,
     processExistingMessages: false, // 既存コメントを処理するかどうか（デフォルトはfalse）
-    requestDelay: 100 // リクエスト間の最小遅延（ミリ秒）
+    requestDelay: 100, // リクエスト間の最小遅延（ミリ秒）
+    translationEngine: 'auto', // 翻訳エンジン: 'auto', 'chrome', 'gemini'
+    preferOfflineTranslation: true // オフライン翻訳を優先するかどうか
   };
   
   // 保存された設定を読み込む
@@ -67,6 +69,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   // 新しい設定オプションのUI初期化
   const processExistingMessagesCheckbox = document.getElementById('processExistingMessages');
   const requestDelayInput = document.getElementById('requestDelay');
+  const translationEngineSelect = document.getElementById('translationEngine');
+  const preferOfflineTranslationCheckbox = document.getElementById('preferOfflineTranslation');
   
   if (processExistingMessagesCheckbox) {
     processExistingMessagesCheckbox.checked = settings.processExistingMessages;
@@ -74,6 +78,14 @@ document.addEventListener('DOMContentLoaded', async () => {
   
   if (requestDelayInput) {
     requestDelayInput.value = settings.requestDelay;
+  }
+  
+  if (translationEngineSelect) {
+    translationEngineSelect.value = settings.translationEngine || 'auto';
+  }
+  
+  if (preferOfflineTranslationCheckbox) {
+    preferOfflineTranslationCheckbox.checked = settings.preferOfflineTranslation !== false;
   }
   
   // 統計情報を読み込む
@@ -103,7 +115,9 @@ document.addEventListener('DOMContentLoaded', async () => {
       useCache: useCacheCheckbox.checked,
       maxCacheAge: parseInt(maxCacheAgeInput.value),
       processExistingMessages: document.getElementById('processExistingMessages')?.checked || false,
-      requestDelay: parseInt(document.getElementById('requestDelay')?.value || '100')
+      requestDelay: parseInt(document.getElementById('requestDelay')?.value || '100'),
+      translationEngine: document.getElementById('translationEngine')?.value || 'auto',
+      preferOfflineTranslation: document.getElementById('preferOfflineTranslation')?.checked !== false
     };
     
     // 設定を保存
@@ -186,6 +200,14 @@ document.addEventListener('DOMContentLoaded', async () => {
       
       if (requestDelayInput) {
         requestDelayInput.value = resetSettings.requestDelay;
+      }
+      
+      if (translationEngineSelect) {
+        translationEngineSelect.value = resetSettings.translationEngine || 'auto';
+      }
+      
+      if (preferOfflineTranslationCheckbox) {
+        preferOfflineTranslationCheckbox.checked = resetSettings.preferOfflineTranslation !== false;
       }
       
       // ステータスメッセージを表示

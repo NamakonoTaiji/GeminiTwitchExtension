@@ -370,11 +370,14 @@ async function processChatMessage(messageNode) {
     const translationResult = await sendTranslationRequest(messageText, sourceLang);
     
     if (translationResult && translationResult.success) {
-      // 翻訳結果を表示
-      displayTranslation(messageElement, translationResult.translatedText);
+      // 翻訳結果を表示 (翻訳エンジン情報を渡す)
+      displayTranslation(messageElement, translationResult.translatedText, translationResult.engine);
       
       // 処理済みとしてマーク
       translatedComments.set(messageId, true);
+      
+      // 使用された翻訳エンジンをログ記録
+      console.log(`翻訳エンジン: ${translationResult.engine || '不明'}`);
     } else if (translationResult) {
       // エラーメッセージをコンソールに出力
       console.error('翻訳エラー:', translationResult.error);
@@ -583,21 +586,29 @@ function handleContextInvalidated() {
 }
 
 // 翻訳表示関数
-function displayTranslation(messageElement, translatedText) {
+function displayTranslation(messageElement, translatedText, engine = '') {
   console.log(`翻訳表示: "${translatedText}"`);
   
+  // 翻訳エンジンに応じた接頭辞を作成
+  let prefix = settings.displayPrefix;
+  if (engine === 'chrome') {
+    prefix = '💻 ' + prefix; // コンピュータアイコン + 通常の接頭辞
+  } else if (engine === 'gemini') {
+    prefix = '🤖 ' + prefix; // ロボットアイコン + 通常の接頭辞
+  }
+
   // 既に翻訳要素があれば更新
   let translationElement = messageElement.querySelector('.twitch-gemini-translation');
   
   if (translationElement) {
-    translationElement.textContent = `${settings.displayPrefix} ${translatedText}`;
+    translationElement.textContent = `${prefix} ${translatedText}`;
     return;
   }
   
   // 翻訳表示用の要素を作成
   translationElement = document.createElement('div');
   translationElement.className = 'twitch-gemini-translation';
-  translationElement.textContent = `${settings.displayPrefix} ${translatedText}`;
+  translationElement.textContent = `${prefix} ${translatedText}`;
   
   // フォントサイズの設定
   let fontSize = '0.9em';
