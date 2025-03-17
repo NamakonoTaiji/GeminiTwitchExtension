@@ -58,6 +58,33 @@ input[type="text"], select, input[type="number"] {
   box-sizing: border-box;
 }
 
+/* APIキーコンテナのスタイル */
+.api-key-container {
+  display: flex;
+  gap: 8px;
+}
+
+.api-key-container input[type="text"] {
+  flex: 1;
+}
+
+/* 小さいボタンのスタイル */
+.small-button {
+  background-color: #3a3a3d;
+  color: white;
+  border: none;
+  padding: 8px 12px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 14px;
+  transition: background-color 0.2s;
+  white-space: nowrap;
+}
+
+.small-button:hover {
+  background-color: #5d5d64;
+}
+
 input[type="text"]:focus, select:focus, input[type="number"]:focus {
   border-color: #4db6ac; /* Geminiのカラーに近い色に変更 */
   outline: none;

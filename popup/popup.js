@@ -21,11 +21,28 @@ document.addEventListener('DOMContentLoaded', async () => {
     await chrome.storage.sync.set({ enabled: newEnabled });
     updateStatusText(newEnabled);
     
+    // バックグラウンドスクリプトに設定更新を通知
+    try {
+      chrome.runtime.sendMessage({ action: 'settingsUpdated' });
+    } catch (error) {
+      console.error('バックグラウンド通知エラー:', error);
+    }
+    
     // content scriptに状態変更を通知
-    const tabs = await chrome.tabs.query({ url: '*://*.twitch.tv/*' });
-    tabs.forEach(tab => {
-      chrome.tabs.sendMessage(tab.id, { action: 'toggleTranslation', enabled: newEnabled });
-    });
+    try {
+      const tabs = await chrome.tabs.query({ url: '*://*.twitch.tv/*' });
+      if (tabs.length > 0) {
+        console.log(`${tabs.length}個のTwitchタブに通知します`);
+        tabs.forEach(tab => {
+          chrome.tabs.sendMessage(tab.id, { action: 'toggleTranslation', enabled: newEnabled })
+            .catch(err => console.error(`タブ${tab.id}への通知エラー:`, err));
+        });
+      } else {
+        console.log('Twitchのタブが見つかりませんでした');
+      }
+    } catch (error) {
+      console.error('Twitchタブ通知エラー:', error);
+    }
   });
 
   // 設定ボタンのイベントリスナー

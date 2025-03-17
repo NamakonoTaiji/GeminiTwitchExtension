@@ -14,7 +14,10 @@
       
       <div class="form-group">
         <label for="apiKey">Gemini APIキー:</label>
-        <input type="text" id="apiKey" placeholder="Gemini APIキーを入力してください">
+        <div class="api-key-container">
+          <input type="text" id="apiKey" placeholder="Gemini APIキーを入力してください">
+          <button type="button" id="toggleApiKeyVisibility" class="small-button">表示</button>
+        </div>
         <p class="help-text">
           Gemini APIキーは <a href="https://ai.google.dev/" target="_blank">Google AI Studio</a> から取得できます。
           アカウント登録後、APIキーを作成してください。
@@ -41,22 +44,12 @@
       </div>
       
       <div class="form-group">
-        <label for="translationEngine">翻訳エンジン:</label>
-        <select id="translationEngine">
-          <option value="auto">自動選択（推奨）</option>
-          <option value="chrome">Chrome組み込み翻訳</option>
-          <option value="gemini">Gemini API</option>
+        <label for="geminiModel">Geminiモデル:</label>
+        <select id="geminiModel">
+          <option value="gemini-2.0-flash-lite">Flash Lite (軽量・高速)</option>
+          <option value="gemini-2.0-flash">Flash (高品質)</option>
         </select>
-        <p class="help-text">自動選択では、利用可能な最適な翻訳エンジンが選択されます。</p>
-      </div>
-      
-      <div class="form-group">
-        <label for="preferOfflineTranslation">オフライン翻訳を優先:</label>
-        <label class="toggle">
-          <input type="checkbox" id="preferOfflineTranslation" checked>
-          <span class="slider"></span>
-        </label>
-        <p class="help-text">有効にすると、Chrome組み込み翻訳を優先的に使用します。オフラインまたはプライバシーを重視する場合におすすめです。</p>
+        <p class="help-text">Flash Liteは高速ですが、Flashはより高品質な翻訳を提供します。</p>
       </div>
       
       <div class="form-group">
@@ -192,24 +185,17 @@
     
     <div class="info-section">
       <h2>使い方</h2>
-      <p>1. 翻訳エンジンを選択します（「自動選択」がおすすめです）。</p>
-      <p>2. Gemini APIを使用する場合は、Gemini APIキーを入力して保存します。</p>
-      <p>3. 翻訳機能を有効にします。</p>
-      <p>4. 必要に応じて翻訳モードや表示設定をカスタマイズします。</p>
-      <p>5. Twitchを開くと、設定に基づいてチャットメッセージが自動翻訳されます。</p>
+      <p>1. Gemini APIキーを入力して保存します。</p>
+      <p>2. 翻訳機能を有効にします。</p>
+      <p>3. 必要に応じて翻訳モードや表示設定をカスタマイズします。</p>
+      <p>4. Twitchを開くと、設定に基づいてチャットメッセージが自動翻訳されます。</p>
       
-      <h3>翻訳エンジンについて</h3>
+      <h3>Geminiモデルについて</h3>
       <div class="alert-info">
-        <p><strong>重要</strong>: Chrome組み込み翻訳を使用するには、Chromeフラグの有効化が必要です。</p>
-        <ol>
-          <li>Chromeで <code>chrome://flags/#translation-api</code> を開く</li>
-          <li>「有効」を選択</li>
-          <li>Chromeを再起動</li>
-        </ol>
+        <p><strong>Gemini Flash</strong>: 高品質な翻訳を提供しますが、やや処理が重くなります。</p>
+        <p><strong>Gemini Flash Lite</strong>: 軽量化された高速モデルで、一般的な用途に適しています。</p>
       </div>
-      <p><strong>Chrome組み込み翻訳</strong>: APIキー不要、オフライン動作、高速、プライバシー重視。言語ペアの制限あり。</p>
-      <p><strong>Gemini API</strong>: 高品質な文脈考慮の翻訳、幅広い言語サポート。APIキーが必要。</p>
-      <p><strong>自動選択</strong>: 利用可能な最適な翻訳エンジンを自動選択します。</p>
+      <p>Gemini APIキーは <a href="https://ai.google.dev/" target="_blank">Google AI Studio</a> から無料で取得できます。</p>
     </div>
     
     <div class="button-group centered">

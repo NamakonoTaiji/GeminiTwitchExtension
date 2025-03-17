@@ -1,11 +1,13 @@
 document.addEventListener('DOMContentLoaded', async () => {
   // 要素の取得
   const apiKeyInput = document.getElementById('apiKey');
+  const toggleApiKeyVisibilityButton = document.getElementById('toggleApiKeyVisibility');
   const saveButton = document.getElementById('saveButton');
   const testButton = document.getElementById('testButton');
   const resetButton = document.getElementById('resetButton');
   const statusMessage = document.getElementById('status-message');
   const translationEnabledCheckbox = document.getElementById('translationEnabled');
+  const geminiModelSelect = document.getElementById('geminiModel');
   const translationModeSelect = document.getElementById('translationMode');
   const japaneseThresholdInput = document.getElementById('japaneseThreshold');
   const japaneseThresholdValue = document.getElementById('japaneseThresholdValue');
@@ -38,21 +40,30 @@ document.addEventListener('DOMContentLoaded', async () => {
     englishThreshold: 50,
     displayPrefix: '🇯🇵',
     textColor: '#9b9b9b',
-    accentColor: '#4db6ac',
+    accentColor: '#9147ff',
     fontSize: 'medium',
     useCache: true,
     maxCacheAge: 24,
     processExistingMessages: false, // 既存コメントを処理するかどうか（デフォルトはfalse）
     requestDelay: 100, // リクエスト間の最小遅延（ミリ秒）
-    translationEngine: 'auto', // 翻訳エンジン: 'auto', 'chrome', 'gemini'
-    preferOfflineTranslation: true // オフライン翻訳を優先するかどうか
+    geminiModel: 'gemini-2.0-flash-lite' // 使用するGeminiモデル: 'gemini-2.0-flash-lite', 'gemini-2.0-flash'
   };
   
   // 保存された設定を読み込む
   const settings = await chrome.storage.sync.get(defaultSettings);
   
+  // 実際のAPIキーを保持する変数
+  let actualApiKey = settings.apiKey;
+  
   // UIを初期状態に設定
-  apiKeyInput.value = settings.apiKey;
+  if (actualApiKey) {
+    // APIキーをマスク表示
+    apiKeyInput.value = '•'.repeat(Math.min(actualApiKey.length, 20));
+    apiKeyInput.setAttribute('data-masked', 'true');
+  } else {
+    apiKeyInput.value = '';
+    apiKeyInput.setAttribute('data-masked', 'false');
+  }
   translationEnabledCheckbox.checked = settings.enabled;
   translationModeSelect.value = settings.translationMode;
   japaneseThresholdInput.value = settings.japaneseThreshold;
@@ -69,8 +80,6 @@ document.addEventListener('DOMContentLoaded', async () => {
   // 新しい設定オプションのUI初期化
   const processExistingMessagesCheckbox = document.getElementById('processExistingMessages');
   const requestDelayInput = document.getElementById('requestDelay');
-  const translationEngineSelect = document.getElementById('translationEngine');
-  const preferOfflineTranslationCheckbox = document.getElementById('preferOfflineTranslation');
   
   if (processExistingMessagesCheckbox) {
     processExistingMessagesCheckbox.checked = settings.processExistingMessages;
@@ -80,12 +89,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     requestDelayInput.value = settings.requestDelay;
   }
   
-  if (translationEngineSelect) {
-    translationEngineSelect.value = settings.translationEngine || 'auto';
-  }
-  
-  if (preferOfflineTranslationCheckbox) {
-    preferOfflineTranslationCheckbox.checked = settings.preferOfflineTranslation !== false;
+  if (geminiModelSelect) {
+    geminiModelSelect.value = settings.geminiModel || 'gemini-2.0-flash-lite';
   }
   
   // 統計情報を読み込む
@@ -100,10 +105,55 @@ document.addEventListener('DOMContentLoaded', async () => {
     englishThresholdValue.textContent = `${englishThresholdInput.value}%`;
   });
   
+  // APIキー表示切替ボタンのイベントリスナー
+  if (toggleApiKeyVisibilityButton) {
+    toggleApiKeyVisibilityButton.addEventListener('click', () => {
+      const isMasked = apiKeyInput.getAttribute('data-masked') === 'true';
+      
+      if (isMasked) {
+        // マスクを解除して実際のAPIキーを表示
+        apiKeyInput.value = actualApiKey;
+        apiKeyInput.setAttribute('data-masked', 'false');
+        toggleApiKeyVisibilityButton.textContent = '非表示';
+      } else {
+        // APIキーをマスク表示
+        if (actualApiKey) {
+          apiKeyInput.value = '•'.repeat(Math.min(actualApiKey.length, 20));
+          apiKeyInput.setAttribute('data-masked', 'true');
+          toggleApiKeyVisibilityButton.textContent = '表示';
+        }
+      }
+    });
+  }
+  
+  // APIキー入力フィールドのフォーカスイベント
+  apiKeyInput.addEventListener('focus', () => {
+    // マスクされている場合は、フォーカス時に空にする
+    if (apiKeyInput.getAttribute('data-masked') === 'true') {
+      apiKeyInput.value = '';
+      apiKeyInput.setAttribute('data-masked', 'false');
+      if (toggleApiKeyVisibilityButton) {
+        toggleApiKeyVisibilityButton.textContent = '非表示';
+      }
+    }
+  });
+  
+  // APIキー入力フィールドの変更イベント
+  apiKeyInput.addEventListener('input', () => {
+    // 入力中はマスク解除状態を維持
+    actualApiKey = apiKeyInput.value.trim();
+    apiKeyInput.setAttribute('data-masked', 'false');
+  });
+  
   // 保存ボタンのイベントリスナー
   saveButton.addEventListener('click', async () => {
+    // 現在の入力値を取得（マスクされていない場合は入力値、マスクされている場合は保存済みの値）
+    const apiKeyToSave = apiKeyInput.getAttribute('data-masked') === 'true' ? 
+      actualApiKey : apiKeyInput.value.trim();
+    
+    // 新しい設定を作成
     const newSettings = {
-      apiKey: apiKeyInput.value.trim(),
+      apiKey: apiKeyToSave,
       enabled: translationEnabledCheckbox.checked,
       translationMode: translationModeSelect.value,
       japaneseThreshold: parseInt(japaneseThresholdInput.value),
@@ -116,8 +166,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       maxCacheAge: parseInt(maxCacheAgeInput.value),
       processExistingMessages: document.getElementById('processExistingMessages')?.checked || false,
       requestDelay: parseInt(document.getElementById('requestDelay')?.value || '100'),
-      translationEngine: document.getElementById('translationEngine')?.value || 'auto',
-      preferOfflineTranslation: document.getElementById('preferOfflineTranslation')?.checked !== false
+      geminiModel: geminiModelSelect.value || 'gemini-2.0-flash-lite'
     };
     
     // 設定を保存
@@ -202,12 +251,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         requestDelayInput.value = resetSettings.requestDelay;
       }
       
-      if (translationEngineSelect) {
-        translationEngineSelect.value = resetSettings.translationEngine || 'auto';
-      }
-      
-      if (preferOfflineTranslationCheckbox) {
-        preferOfflineTranslationCheckbox.checked = resetSettings.preferOfflineTranslation !== false;
+      if (geminiModelSelect) {
+        geminiModelSelect.value = resetSettings.geminiModel || 'gemini-2.0-flash-lite';
       }
       
       // ステータスメッセージを表示

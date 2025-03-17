@@ -1,6 +1,7 @@
 // Gemini API関連の定数
-const GEMINI_API_ENDPOINT =
-  "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite:generateContent";
+const GEMINI_API_BASE =
+  "https://generativelanguage.googleapis.com/v1beta/models/";
+const GEMINI_API_GENERATE = ":generateContent";
 
 // APIリクエストの管理
 let pendingRequests = 0;
@@ -26,8 +27,7 @@ const defaultSettings = {
   maxCacheAge: 24, // キャッシュの有効期間（時間）
   processExistingMessages: false, // 既存コメントを処理するかどうか
   requestDelay: 100, // リクエスト間の最小遅延（ミリ秒）
-  translationEngine: "auto", // 翻訳エンジン: 'auto', 'chrome', 'gemini'
-  preferOfflineTranslation: true, // オフライン翻訳を優先するかどうか
+  geminiModel: "gemini-2.0-flash-lite", // 使用するGeminiモデル
 };
 
 // 設定データをロード
@@ -190,101 +190,7 @@ function cacheTranslation(text, sourceLang, translationResult) {
 // 最後にキャッシュを保存した時間
 let lastCacheSave = Date.now();
 
-// Chromeの翻訳APIが使用可能かチェック
-async function isChromeTranslatorAvailable() {
-  try {
-    // APIが存在するかの基本チェック
-    if (!("ai" in self && "translator" in self.ai)) {
-      console.log(
-        "Chrome翻訳APIが利用できません。chrome://flags/#translation-api フラグを有効にしてください。"
-      );
-      return false;
-    }
-
-    // 実際に使用できるかのテスト
-    try {
-      const capabilities = await self.ai.translator.capabilities();
-      console.log(
-        "Chrome翻訳APIが利用可能です。サポートされている言語ペアを確認します。"
-      );
-      return true;
-    } catch (e) {
-      console.warn("Chrome翻訳APIは存在しますが、使用できません:", e);
-      return false;
-    }
-  } catch (error) {
-    console.warn("Chrome翻訳APIのチェック中にエラーが発生しました:", error);
-    return false;
-  }
-}
-
-// Chrome組み込み翻訳APIを使用して翻訳
-async function translateWithChromeAPI(text, sourceLang, targetLang = "ja") {
-  try {
-    // 翻訳機能が使用可能かチェック
-    if (!(await isChromeTranslatorAvailable())) {
-      return {
-        success: false,
-        error:
-          "Chrome翻訳APIが利用できません。chrome://flags/#translation-api フラグを有効にしてください。",
-      };
-    }
-
-    // 自動言語検出を処理 (現状ではChrome翻訳APIが自動言語検出に対応していないため)
-    // autoの場合はデフォルトでenを使用するが、将来的には言語を推定するロジックを追加予定
-    const effectiveSourceLang = sourceLang === "auto" ? "en" : sourceLang;
-
-    // 言語ペアのサポートをチェック
-    const capabilities = await self.ai.translator.capabilities();
-    const support = capabilities.languagePairAvailable(
-      effectiveSourceLang,
-      targetLang
-    );
-
-    if (support === "no") {
-      return {
-        success: false,
-        error: `該当言語ペア(${effectiveSourceLang} -> ${targetLang})はサポートされていません。現在、Chrome翻訳APIはサポートする言語ペアが限られています。`,
-      };
-    }
-
-    if (support === "after-download") {
-      console.log(
-        `言語パック(${effectiveSourceLang} -> ${targetLang})のダウンロードが必要です`
-      );
-    }
-
-    // 翻訳機能の生成
-    const translator = await self.ai.translator.create({
-      sourceLanguage: effectiveSourceLang,
-      targetLanguage: targetLang,
-      monitor(m) {
-        m.addEventListener("downloadprogress", (e) => {
-          console.log(
-            `言語パックのダウンロード中: ${e.loaded} / ${e.total} バイト`
-          );
-        });
-      },
-    });
-
-    // 翻訳実行
-    const translatedText = await translator.translate(text);
-
-    // 結果を返す
-    return {
-      success: true,
-      translatedText: translatedText,
-      detectedLanguage: effectiveSourceLang,
-      engine: "chrome",
-    };
-  } catch (error) {
-    console.error("Chrome翻訳APIでの翻訳中にエラーが発生しました:", error);
-    return {
-      success: false,
-      error: error.message || "Chrome翻訳APIでの翻訳中にエラーが発生しました",
-    };
-  }
-}
+// 注意: Chrome翻訳APIは現在サポートされていません
 
 // Gemini APIを使用してテキストを翻訳
 async function translateWithGeminiAPI(text, apiKey, sourceLang = "EN") {
@@ -318,7 +224,16 @@ async function translateWithGeminiAPI(text, apiKey, sourceLang = "EN") {
             {
               text: `Translate the following ${
                 sourceLang === "auto" ? "text" : sourceLang + " text"
-              } to Japanese. Preserve the original meaning, tone, and nuance. Only return the Japanese translation without any explanations or notes:
+              } to Japanese. This is a Twitch livestream chat message that may contain internet slang, gaming terms, emotes, abbreviations, and stream-specific expressions.
+
+Please consider:
+- Preserve memes, jokes, and cultural references when possible
+- Keep emotes and symbols as they are
+- Use equivalent Japanese internet/streaming slang where appropriate
+- Maintain the casual, conversational tone of streaming culture
+- Translate abbreviations to their Japanese equivalents when possible
+
+Only return the Japanese translation without any explanations or notes:
 
 ${text}`,
             },
@@ -326,16 +241,21 @@ ${text}`,
         },
       ],
       generationConfig: {
-        temperature: 0.2,
-        topP: 0.8,
+        temperature: 0.3, // 少し上げて創造性を高める
+        topP: 0.9,
         topK: 40,
       },
     };
 
-    // Gemini APIエンドポイントとAPIキーを組み合わせたURL
-    const apiUrl = `${GEMINI_API_ENDPOINT}?key=${apiKey}`;
+    // 使用するGeminiモデルを設定から取得
+    const model = settings.geminiModel || "gemini-2.0-flash-lite";
 
-    console.log(`Gemini API リクエスト送信先: ${GEMINI_API_ENDPOINT}`);
+    // Gemini APIエンドポイントとAPIキーを組み合わせたURL
+    const apiUrl = `${GEMINI_API_BASE}${model}${GEMINI_API_GENERATE}?key=${apiKey}`;
+
+    console.log(
+      `Gemini API リクエスト送信先: ${GEMINI_API_BASE}${model}${GEMINI_API_GENERATE}`
+    );
 
     // Gemini APIにリクエスト
     const response = await fetch(apiUrl, {
@@ -386,6 +306,7 @@ ${text}`,
         success: true,
         translatedText: translatedText,
         detectedLanguage: sourceLang === "auto" ? "auto-detected" : sourceLang,
+        engine: "gemini",
       };
 
       // 翻訳結果をキャッシュに保存
@@ -440,8 +361,11 @@ async function testApiKey(apiKey) {
       },
     };
 
+    // テスト用にデフォルトモデルを使用
+    const model = "gemini-2.0-flash-lite";
+
     // Gemini APIエンドポイントとAPIキーを組み合わせたURL
-    const apiUrl = `${GEMINI_API_ENDPOINT}?key=${apiKey}`;
+    const apiUrl = `${GEMINI_API_BASE}${model}${GEMINI_API_GENERATE}?key=${apiKey}`;
 
     // テストリクエストを送信
     const response = await fetch(apiUrl, {
@@ -493,7 +417,7 @@ async function testApiKey(apiKey) {
   }
 }
 
-// 翻訳エンジンを選択してテキストを翻訳
+// テキストを翻訳
 async function translateText(text, apiKey, sourceLang = "auto") {
   // 統計情報を更新
   stats.totalRequests++;
@@ -504,102 +428,20 @@ async function translateText(text, apiKey, sourceLang = "auto") {
     return cachedResult;
   }
 
-  // 翻訳エンジンの選択
-  const engine = settings.translationEngine;
-
-  // Chrome翻訳APIの利用可能性をチェック
-  const chromeAvailable = await isChromeTranslatorAvailable();
-
-  let translationResult;
-
-  // 1. 自動選択モードの場合
-  if (engine === "auto") {
-    // オフライン翻訳を優先する設定で、Chrome翻訳APIが利用可能な場合
-    if (settings.preferOfflineTranslation && chromeAvailable) {
-      translationResult = await translateWithChromeAPI(text, sourceLang);
-
-      // Chrome翻訳が失敗した場合は、Gemini APIを使用
-      if (!translationResult.success) {
-        console.log(
-          "Chrome翻訳APIが失敗しました。Gemini APIにフォールバックします。"
-        );
-        if (apiKey) {
-          translationResult = await translateWithGeminiAPI(
-            text,
-            apiKey,
-            sourceLang
-          );
-        } else {
-          return {
-            success: false,
-            error: "Gemini APIキーが設定されていません",
-          };
-        }
-      }
-    }
-    // それ以外の場合は、まずGemini APIを試す
-    else if (apiKey) {
-      translationResult = await translateWithGeminiAPI(
-        text,
-        apiKey,
-        sourceLang
-      );
-
-      // Gemini APIが失敗した場合は、Chrome翻訳APIを使用（利用可能な場合）
-      if (!translationResult.success && chromeAvailable) {
-        console.log(
-          "Gemini APIが失敗しました。Chrome翻訳APIにフォールバックします。"
-        );
-        translationResult = await translateWithChromeAPI(text, sourceLang);
-      }
-    }
-    // APIキーがない場合は、Chrome翻訳APIのみを試す
-    else if (chromeAvailable) {
-      translationResult = await translateWithChromeAPI(text, sourceLang);
-    }
-    // どちらも利用できない場合
-    else {
-      return { success: false, error: "翻訳エンジンが利用できません" };
-    }
+  // APIキーがない場合はエラー
+  if (!apiKey) {
+    return {
+      success: false,
+      error: "Gemini APIキーが設定されていません",
+    };
   }
-  // 2. Chrome翻訳APIを指定した場合
-  else if (engine === "chrome") {
-    if (chromeAvailable) {
-      translationResult = await translateWithChromeAPI(text, sourceLang);
-    } else {
-      if (apiKey && settings.preferOfflineTranslation === false) {
-        console.log(
-          "Chrome翻訳APIが利用できません。Gemini APIにフォールバックします。"
-        );
-        translationResult = await translateWithGeminiAPI(
-          text,
-          apiKey,
-          sourceLang
-        );
-      } else {
-        return { success: false, error: "Chrome翻訳APIが利用できません" };
-      }
-    }
-  }
-  // 3. Gemini APIを指定した場合
-  else if (engine === "gemini") {
-    if (apiKey) {
-      translationResult = await translateWithGeminiAPI(
-        text,
-        apiKey,
-        sourceLang
-      );
-    } else {
-      if (chromeAvailable && settings.preferOfflineTranslation) {
-        console.log(
-          "Gemini APIキーが設定されていません。Chrome翻訳APIにフォールバックします。"
-        );
-        translationResult = await translateWithChromeAPI(text, sourceLang);
-      } else {
-        return { success: false, error: "Gemini APIキーが設定されていません" };
-      }
-    }
-  }
+
+  // Gemini APIで翻訳を実行
+  const translationResult = await translateWithGeminiAPI(
+    text,
+    apiKey,
+    sourceLang
+  );
 
   // 翻訳結果が成功した場合はキャッシュに保存
   if (translationResult && translationResult.success) {
@@ -654,6 +496,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       message.sourceLang || "auto"
     );
     if (cachedResult) {
+      // キャッシュ結果にエンジン情報がない場合は追加
+      if (!cachedResult.engine) {
+        cachedResult.engine = "cached";
+      }
       sendResponse(cachedResult);
       return true;
     }

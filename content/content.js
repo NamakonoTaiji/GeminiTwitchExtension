@@ -370,14 +370,17 @@ async function processChatMessage(messageNode) {
     const translationResult = await sendTranslationRequest(messageText, sourceLang);
     
     if (translationResult && translationResult.success) {
+      // 翻訳エンジンの確認とデバッグ情報
+      console.log('翻訳結果:', JSON.stringify({ 
+        success: translationResult.success, 
+        engine: translationResult.engine || 'エンジン情報なし' 
+      }));
+      
       // 翻訳結果を表示 (翻訳エンジン情報を渡す)
       displayTranslation(messageElement, translationResult.translatedText, translationResult.engine);
       
       // 処理済みとしてマーク
       translatedComments.set(messageId, true);
-      
-      // 使用された翻訳エンジンをログ記録
-      console.log(`翻訳エンジン: ${translationResult.engine || '不明'}`);
     } else if (translationResult) {
       // エラーメッセージをコンソールに出力
       console.error('翻訳エラー:', translationResult.error);
@@ -588,13 +591,14 @@ function handleContextInvalidated() {
 // 翻訳表示関数
 function displayTranslation(messageElement, translatedText, engine = '') {
   console.log(`翻訳表示: "${translatedText}"`);
+  console.log(`翻訳エンジン: ${engine || '不明'}`);
   
   // 翻訳エンジンに応じた接頭辞を作成
   let prefix = settings.displayPrefix;
-  if (engine === 'chrome') {
-    prefix = '💻 ' + prefix; // コンピュータアイコン + 通常の接頭辞
-  } else if (engine === 'gemini') {
+  if (engine === 'gemini') {
     prefix = '🤖 ' + prefix; // ロボットアイコン + 通常の接頭辞
+  } else if (engine === 'cached') {
+    prefix = '💾 ' + prefix; // ディスクアイコン + 通常の接頭辞
   }
 
   // 既に翻訳要素があれば更新
@@ -678,16 +682,22 @@ function stopObserving() {
 // 設定を更新
 async function updateSettings() {
   try {
+    console.log('設定の再取得を開始...');
+    const oldEnabled = isEnabled; // 更新前の状態を保存
+    
     // 設定を再取得
     settings = await getSettings();
     isEnabled = settings.enabled;
     apiKeySet = !!settings.apiKey;
     
     console.log('設定を更新しました');
+    console.log(`有効状態: ${oldEnabled} -> ${isEnabled}`);
+    console.log(`APIキー: ${apiKeySet ? '設定済み' : '未設定'}`);
     
     // 設定をローカルストレージに保存（コンテキスト無効化への対策）
     try {
       localStorage.setItem('twitch_gemini_settings', JSON.stringify(settings));
+      console.log('設定をローカルストレージに保存しました');
     } catch (storageError) {
       console.warn('ローカルストレージへの設定保存に失敗しました:', storageError);
     }
@@ -695,10 +705,18 @@ async function updateSettings() {
     // 有効/無効状態に応じて監視を開始/停止
     if (isEnabled && apiKeySet) {
       if (!observer) {
+        console.log('監視を開始します...');
         startObserving();
+      } else {
+        console.log('既に監視中です');
       }
     } else {
-      stopObserving();
+      if (observer) {
+        console.log('監視を停止します...');
+        stopObserving();
+      } else {
+        console.log('監視は既に停止しています');
+      }
     }
   } catch (error) {
     console.error('設定更新エラー:', error);
@@ -725,26 +743,36 @@ async function updateSettings() {
 
 // メッセージリスナーの設定
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  // 翻訳の有効/無効切り替え
-  if (message.action === 'toggleTranslation') {
-    isEnabled = message.enabled;
+  try {
+    console.log('メッセージを受信しました:', message.action);
     
-    if (isEnabled && apiKeySet) {
-      startObserving();
-    } else {
-      stopObserving();
+    // 翻訳の有効/無効切り替え
+    if (message.action === 'toggleTranslation') {
+      isEnabled = message.enabled;
+      console.log(`翻訳機能の切り替え: ${isEnabled ? '有効' : '無効'}`);
+      
+      if (isEnabled && apiKeySet) {
+        startObserving();
+      } else {
+        stopObserving();
+      }
+      
+      sendResponse({ success: true });
     }
     
-    sendResponse({ success: true });
+    // 設定更新の通知
+    else if (message.action === 'settingsUpdated') {
+      console.log('設定更新の通知を受信しました');
+      updateSettings();
+      sendResponse({ success: true });
+    }
+    
+    return true;
+  } catch (error) {
+    console.error('メッセージ処理中のエラー:', error);
+    sendResponse({ success: false, error: error.message });
+    return true;
   }
-  
-  // 設定更新の通知
-  else if (message.action === 'settingsUpdated') {
-    updateSettings();
-    sendResponse({ success: true });
-  }
-  
-  return true;
 });
 
 // 拡張機能のコンテキスト変更を監視
