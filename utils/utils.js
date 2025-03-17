@@ -22,6 +22,19 @@ export function debounce(func, delay) {
 }
 
 /**
+ * 文字列を指定した長さに切り詰める
+ * @param {string} str 切り詰める文字列
+ * @param {number} maxLength 最大長
+ * @param {string} suffix 切り詰めた場合に追加する接尾辞
+ * @returns {string} 切り詰められた文字列
+ */
+export function truncateString(str, maxLength, suffix = '...') {
+  if (!str) return '';
+  if (str.length <= maxLength) return str;
+  return str.substring(0, maxLength - suffix.length) + suffix;
+}
+
+/**
  * ローカルストレージを使用して設定を保存する
  * @param {string} key 保存キー
  * @param {object} data 保存するデータ

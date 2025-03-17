@@ -12,6 +12,48 @@ import { getCachedTranslation, cacheTranslation } from './cache.js';
 const GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models/";
 const GEMINI_API_GENERATE = ":generateContent";
 
+// 翻訳用プロンプトテンプレート
+const TRANSLATION_PROMPT_TEMPLATE = `Translate the following {{SOURCE_LANG}} to Japanese. This is a Twitch livestream chat message that may contain internet slang, gaming terms, emotes, abbreviations, and stream-specific expressions.
+
+Please consider:
+- Preserve memes, jokes, and cultural references when possible
+- Keep emotes and symbols as they are
+- Use equivalent Japanese internet/streaming slang where appropriate
+- Maintain the casual, conversational tone of streaming culture
+- Translate abbreviations to their Japanese equivalents when possible
+
+Only return the Japanese translation without any explanations or notes:
+
+{{TEXT}}`;
+
+/**
+ * 翻訳用プロンプトを作成
+ * @param {string} text 翻訳するテキスト
+ * @param {string} sourceLang ソース言語
+ * @returns {object} プロンプトオブジェクト
+ */
+function createTranslationPrompt(text, sourceLang) {
+  const langDisplay = sourceLang === "auto" ? "text" : `${sourceLang} text`;
+  
+  const promptText = TRANSLATION_PROMPT_TEMPLATE
+    .replace('{{SOURCE_LANG}}', langDisplay)
+    .replace('{{TEXT}}', text);
+    
+  return {
+    contents: [
+      {
+        role: "user",
+        parts: [{ text: promptText }],
+      },
+    ],
+    generationConfig: {
+      temperature: 0.3,
+      topP: 0.9,
+      topK: 40,
+    },
+  };
+}
+
 /**
  * Gemini APIを使用してテキストを翻訳
  * @param {string} text 翻訳するテキスト
@@ -27,42 +69,12 @@ export async function translateWithGeminiAPI(text, apiKey, sourceLang = "EN") {
   }
 
   try {
-    // 翻訳用のプロンプトを作成
-    // 文脈を理解して翻訳するようにプロンプトを設計
-    const prompt = {
-      contents: [
-        {
-          role: "user",
-          parts: [
-            {
-              text: `Translate the following ${
-                sourceLang === "auto" ? "text" : sourceLang + " text"
-              } to Japanese. This is a Twitch livestream chat message that may contain internet slang, gaming terms, emotes, abbreviations, and stream-specific expressions.
-
-Please consider:
-- Preserve memes, jokes, and cultural references when possible
-- Keep emotes and symbols as they are
-- Use equivalent Japanese internet/streaming slang where appropriate
-- Maintain the casual, conversational tone of streaming culture
-- Translate abbreviations to their Japanese equivalents when possible
-
-Only return the Japanese translation without any explanations or notes:
-
-${text}`,
-            },
-          ],
-        },
-      ],
-      generationConfig: {
-        temperature: 0.3, // 少し上げて創造性を高める
-        topP: 0.9,
-        topK: 40,
-      },
-    };
-
     // 設定から使用するモデルを取得
     const settings = getSettings();
     const model = settings.geminiModel || "gemini-2.0-flash-lite";
+    
+    // 翻訳用のプロンプトを作成
+    const prompt = createTranslationPrompt(text, sourceLang);
 
     // Gemini APIエンドポイントとAPIキーを組み合わせたURL
     const apiUrl = `${GEMINI_API_BASE}${model}${GEMINI_API_GENERATE}?key=${apiKey}`;
@@ -88,9 +100,10 @@ ${text}`,
 
       try {
         const errorData = await response.json();
-        errorMessage = errorData.error.message || errorMessage;
+        errorMessage = errorData.error?.message || errorMessage;
       } catch (e) {
         // エラーレスポンスのパースに失敗した場合は無視
+        console.warn("エラーレスポンスのパースに失敗:", e);
       }
 
       console.error("Gemini API エラー:", errorMessage);
@@ -102,40 +115,47 @@ ${text}`,
 
     // レスポンスを解析
     const data = await response.json();
-
-    // 翻訳結果を抽出
-    if (
-      data.candidates &&
-      data.candidates.length > 0 &&
-      data.candidates[0].content &&
-      data.candidates[0].content.parts &&
-      data.candidates[0].content.parts.length > 0
-    ) {
-      const translatedText = data.candidates[0].content.parts[0].text.trim();
-
-      // 翻訳結果
-      const result = {
-        success: true,
-        translatedText: translatedText,
-        detectedLanguage: sourceLang === "auto" ? "auto-detected" : sourceLang,
-        engine: "gemini",
-      };
-
-      return result;
-    } else {
-      incrementErrors();
-      console.error("Gemini API から有効な翻訳結果が返されませんでした:", data);
-      return {
-        success: false,
-        error: "翻訳結果の取得に失敗しました",
-      };
-    }
+    return extractTranslationFromResponse(data, sourceLang);
   } catch (error) {
     incrementErrors();
     console.error("翻訳中のエラー:", error);
     return {
       success: false,
       error: error.message || "翻訳中に予期せぬエラーが発生しました",
+    };
+  }
+}
+
+/**
+ * APIレスポンスから翻訳結果を抽出
+ * @param {object} data APIレスポンスデータ
+ * @param {string} sourceLang ソース言語
+ * @returns {object} 翻訳結果オブジェクト
+ */
+function extractTranslationFromResponse(data, sourceLang) {
+  // 翻訳結果を抽出
+  if (
+    data.candidates &&
+    data.candidates.length > 0 &&
+    data.candidates[0].content &&
+    data.candidates[0].content.parts &&
+    data.candidates[0].content.parts.length > 0
+  ) {
+    const translatedText = data.candidates[0].content.parts[0].text.trim();
+
+    // 翻訳結果
+    return {
+      success: true,
+      translation: translatedText, 
+      detectedLanguage: sourceLang === "auto" ? "auto-detected" : sourceLang,
+      engine: "gemini",
+    };
+  } else {
+    incrementErrors();
+    console.error("Gemini API から有効な翻訳結果が返されませんでした:", data);
+    return {
+      success: false,
+      error: "翻訳結果の取得に失敗しました",
     };
   }
 }
@@ -148,6 +168,14 @@ ${text}`,
  * @returns {Promise<object>} 翻訳結果
  */
 export async function translateText(text, apiKey, sourceLang = "auto") {
+  // 入力検証
+  if (!text || text.trim().length === 0) {
+    return {
+      success: false,
+      error: "翻訳するテキストが空です",
+    };
+  }
+
   // キャッシュをチェック
   const cachedResult = getCachedTranslation(text, sourceLang);
   if (cachedResult) {
@@ -165,15 +193,24 @@ export async function translateText(text, apiKey, sourceLang = "auto") {
   // API呼び出しの統計を更新
   incrementApiRequests(text.length);
 
-  // Gemini APIで翻訳を実行
-  const translationResult = await translateWithGeminiAPI(text, apiKey, sourceLang);
+  try {
+    // Gemini APIで翻訳を実行
+    const translationResult = await translateWithGeminiAPI(text, apiKey, sourceLang);
 
-  // 翻訳結果が成功した場合はキャッシュに保存
-  if (translationResult && translationResult.success) {
-    cacheTranslation(text, sourceLang, translationResult);
+    // 翻訳結果が成功した場合はキャッシュに保存
+    if (translationResult && translationResult.success) {
+      cacheTranslation(text, sourceLang, translationResult);
+    }
+
+    return translationResult;
+  } catch (error) {
+    console.error("翻訳中にエラーが発生しました:", error);
+    incrementErrors();
+    return {
+      success: false,
+      error: error.message || "翻訳処理中にエラーが発生しました",
+    };
   }
-
-  return translationResult || { success: false, error: "翻訳に失敗しました" };
 }
 
 /**
@@ -185,6 +222,10 @@ export async function testApiKey(apiKey) {
   try {
     // サンプルテキストで翻訳をテスト
     console.log(`APIキーテスト: ${apiKey.substring(0, 5)}...`);
+
+    // 設定から使用するモデルを取得
+    const settings = getSettings();
+    const model = settings.geminiModel || "gemini-2.0-flash-lite";
 
     // 簡単なテスト翻訳を実行
     const prompt = {
@@ -205,13 +246,10 @@ export async function testApiKey(apiKey) {
       },
     };
 
-    // テスト用にデフォルトモデルを使用
-    const model = "gemini-2.0-flash-lite";
-
     // Gemini APIエンドポイントとAPIキーを組み合わせたURL
     const apiUrl = `${GEMINI_API_BASE}${model}${GEMINI_API_GENERATE}?key=${apiKey}`;
 
-    // テストリクエストを送信
+    // Gemini APIにリクエスト
     const response = await fetch(apiUrl, {
       method: "POST",
       headers: {
@@ -220,27 +258,28 @@ export async function testApiKey(apiKey) {
       body: JSON.stringify(prompt),
     });
 
-    console.log(`APIテストレスポンスステータス: ${response.status}`);
-
-    // レスポンスをチェック
+    // エラーチェック
     if (!response.ok) {
-      // エラーの詳細を取得
-      let errorDetails = "";
+      let errorMessage = `エラーステータス: ${response.status}`;
+
       try {
         const errorData = await response.json();
-        errorDetails = errorData.error.message || `ステータスコード: ${response.status}`;
-      } catch (jsonError) {
-        errorDetails = `レスポンスの解析に失敗: ${jsonError.message}`;
+        errorMessage = errorData.error?.message || errorMessage;
+      } catch (e) {
+        // エラーレスポンスのパースに失敗した場合は無視
       }
 
-      console.error(`APIキーテスト失敗:`, errorDetails);
-      return { valid: false, error: errorDetails };
+      console.error("APIキーテストエラー:", errorMessage);
+      return {
+        valid: false,
+        error: errorMessage,
+      };
     }
 
-    // レスポンスをJSON解析
+    // レスポンスを解析
     const data = await response.json();
 
-    // 翻訳結果を確認
+    // 翻訳結果を抽出
     if (
       data.candidates &&
       data.candidates.length > 0 &&
@@ -248,14 +287,25 @@ export async function testApiKey(apiKey) {
       data.candidates[0].content.parts &&
       data.candidates[0].content.parts.length > 0
     ) {
-      console.log("APIキーは有効です");
-      return { valid: true };
+      const translatedText = data.candidates[0].content.parts[0].text.trim();
+      console.log("APIキーテスト成功:", translatedText);
+
+      return {
+        valid: true,
+        translatedText: translatedText,
+      };
     } else {
-      console.error("APIキーテスト: 無効なレスポンス形式", data);
-      return { valid: false, error: "翻訳結果が不正な形式です" };
+      console.error("APIキーテスト: 有効な翻訳結果が返されませんでした");
+      return {
+        valid: false,
+        error: "有効な翻訳結果が返されませんでした",
+      };
     }
   } catch (error) {
     console.error("APIキーテスト中のエラー:", error);
-    return { valid: false, error: error.message };
+    return {
+      valid: false,
+      error: error.message || "APIキーのテスト中に予期せぬエラーが発生しました",
+    };
   }
 }

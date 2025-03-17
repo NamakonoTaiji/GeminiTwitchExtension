@@ -18,8 +18,7 @@
   "content_scripts": [
     {
       "matches": ["*://*.twitch.tv/*"],
-      "js": ["content/content.js"],
-      "type": "module"
+      "js": ["content/content_loader.js"]
     }
   ],
   "permissions": [
@@ -34,7 +33,12 @@
   ],
   "web_accessible_resources": [
     {
-      "resources": ["utils/*.js"],
+      "resources": [
+        "utils/*.js",
+        "content/modules/*.js",
+        "background/modules/*.js",
+        "content/*.js"
+      ],
       "matches": ["*://*.twitch.tv/*"]
     }
   ]

@@ -1,290 +1,470 @@
 /**
- * Twitch Gemini Translator - Background Service Worker
+ * Twitch Gemini Translator - バックグラウンドスクリプト
  * 
- * バックグラウンドプロセスを提供し、翻訳リクエストの処理、
- * 設定の管理、キャッシュの管理、統計情報の追跡などを行います。
+ * 拡張機能のメインバックグラウンドプロセスを管理し、
+ * メッセージハンドリング、初期化、イベント処理を行います。
  */
 
-// モジュールのインポート
-import * as Settings from './modules/settings.js';
-import * as Stats from './modules/stats.js';
-import * as Cache from './modules/cache.js';
-import * as Translator from './modules/translator.js';
-import * as RequestQueue from './modules/requestQueue.js';
+import { loadSettings, getSettings } from './modules/settings.js';
+import { initializeCache } from './modules/cache.js';
+import { initializeRequestQueue } from './modules/requestQueue.js';
+import { translateText } from './modules/translator.js';
+import { loadStats, saveStats } from './modules/stats.js';
+import logger from './modules/logger.js';
+import errorHandler from './modules/errorHandler.js';
+import utils from './modules/utils.js';
 
-// メッセージリスナーの設定
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  // 翻訳リクエスト
-  if (message.action === "translate") {
-    handleTranslateRequest(message, sendResponse);
-    return true; // 非同期応答のために必要
-  }
-
-  // 設定の取得
-  else if (message.action === "getSettings") {
-    sendResponse(Settings.getSettings());
-    return true;
-  }
-
-  // APIキーのテスト
-  else if (message.action === "testApiKey") {
-    Translator.testApiKey(message.apiKey).then(sendResponse);
-    return true; // 非同期応答のために必要
-  }
-
-  // 現在のAPIキーの有効性チェック
-  else if (message.action === "checkApiKey") {
-    handleCheckApiKey(sendResponse);
-    return true; // 非同期応答のために必要
-  }
-
-  // 設定更新の通知
-  else if (message.action === "settingsUpdated") {
-    handleSettingsUpdated(sendResponse);
-    return true;
-  }
-
-  // 翻訳統計の取得
-  else if (message.action === "getStats") {
-    sendResponse({
-      success: true,
-      stats: Stats.getStats(Cache.getCacheSize())
-    });
-    return true;
-  }
-
-  // 統計情報のリセット
-  else if (message.action === "resetStats") {
-    Stats.resetStats().then(() => {
-      sendResponse({ success: true });
-    });
-    return true;
-  }
-
-  // キャッシュのクリア
-  else if (message.action === "clearCache") {
-    const previousSize = Cache.clearCache();
-    console.log(`キャッシュをクリアしました (前: ${previousSize} エントリ)`);
-    sendResponse({
-      success: true,
-      message: `キャッシュをクリアしました (${previousSize} エントリ)`,
-    });
-    return true;
-  }
-
-  // Content Scriptからの初期化通知
-  else if (message.action === "contentScriptInitialized") {
-    handleContentScriptInitialized(message, sendResponse);
-    return true;
-  }
-
-  // Pingリクエスト - 拡張機能コンテキストの有効性確認用
-  else if (message.action === "ping") {
-    const settings = Settings.getSettings();
-    sendResponse({ 
-      success: true, 
-      message: "pong",
-      debug: {
-        cacheSize: Cache.getCacheSize(),
-        enabled: settings.enabled,
-        processExistingMessages: settings.processExistingMessages,
-        timestamp: Date.now()
-      }
-    });
-    return true;
-  }
-  
-  // チャンネル変更通知
-  else if (message.action === "channelChanged") {
-    handleChannelChanged(message, sendResponse);
-    return true;
-  }
-});
+// アプリケーションの状態
+const appState = {
+  initialized: false,
+  initializationError: null,
+  translationEnabled: false,
+  apiKeyValid: false,
+  activeTabId: null,
+  lastSaveTime: 0
+};
 
 /**
- * 翻訳リクエストの処理
- * @param {object} message メッセージオブジェクト
- * @param {function} sendResponse 応答コールバック
+ * 拡張機能を初期化
  */
-async function handleTranslateRequest(message, sendResponse) {
-  const settings = Settings.getSettings();
-  
-  // キャッシュチェックを先に行う
-  const cachedResult = Cache.getCachedTranslation(
-    message.text,
-    message.sourceLang || "auto"
-  );
-  if (cachedResult) {
-    // キャッシュ結果にエンジン情報がない場合は追加
-    if (!cachedResult.engine) {
-      cachedResult.engine = "cached";
-    }
-    
-    // デバッグ情報を追加
-    console.log(`キャッシュヒット: "${message.text.substring(0, 20)}..."`);
-    
-    sendResponse(cachedResult);
-    return;
-  }
-
-  // 翻訳が無効の場合はエラーを返す
-  if (!settings.enabled) {
-    // エラーログに詳細情報を追加
-    console.warn("翻訳機能が無効になっています。現在のsettings:", settings);
-    sendResponse({ success: false, error: "翻訳機能が無効になっています" });
-    return;
-  }
-
-  // APIキーが設定されていない場合はエラーを返す
-  if (!settings.apiKey) {
-    sendResponse({
-      success: false,
-      error: "Gemini APIキーが設定されていません",
-    });
-    return;
-  }
-
-  // キューにリクエストを追加
+async function initializeExtension() {
   try {
-    const result = await RequestQueue.enqueueTranslationRequest(
-      message.text,
-      message.sourceLang || "auto"
-    );
-    sendResponse(result);
-  } catch (error) {
-    sendResponse({ success: false, error: error.message });
-  }
-}
-
-/**
- * APIキーの有効性チェック処理
- * @param {function} sendResponse 応答コールバック
- */
-function handleCheckApiKey(sendResponse) {
-  const settings = Settings.getSettings();
-  
-  if (!settings.apiKey) {
-    sendResponse({ valid: false, error: "APIキーが設定されていません" });
-  } else {
-    Translator.testApiKey(settings.apiKey).then(sendResponse);
-  }
-}
-
-/**
- * 設定更新通知の処理
- * @param {function} sendResponse 応答コールバック
- */
-async function handleSettingsUpdated(sendResponse) {
-  // 設定を再ロード
-  await Settings.loadSettings();
-  const settings = Settings.getSettings();
-
-  // 設定更新時のデバッグ情報の追加
-  console.log("設定が更新されました:", {
-    enabled: settings.enabled,
-    hasApiKey: !!settings.apiKey,
-    translationMode: settings.translationMode,
-  });
-
-  // 現在のセッションIDを記録して、同期問題を回避
-  const sessionId = Date.now().toString();
-  try {
-    await chrome.storage.local.set({ settingsSessionId: sessionId });
-  } catch (error) {
-    console.error("セッションID保存エラー:", error);
-  }
-
-  sendResponse({ success: true, sessionId });
-}
-
-/**
- * Content Script初期化通知の処理
- * @param {object} message メッセージオブジェクト
- * @param {function} sendResponse 応答コールバック
- */
-async function handleContentScriptInitialized(message, sendResponse) {
-  console.log("Content Scriptが初期化されました。有効状態:", message.enabled);
-  
-  // 設定を再ロード - タブ間の状態一貫性を強化
-  try {
-    await Settings.loadSettings();
-    const settings = Settings.getSettings();
-    console.log('初期化通知を受けて設定を再ロードしました');
-    
-    sendResponse({ 
-      success: true, 
-      settings: {
-        enabled: settings.enabled,
-        processExistingMessages: settings.processExistingMessages
-      }
-    });
-  } catch (error) {
-    console.error('初期化通知処理中のエラー:', error);
-    sendResponse({ success: false, error: error.message });
-  }
-}
-
-/**
- * チャンネル変更通知の処理
- * @param {object} message メッセージオブジェクト
- * @param {function} sendResponse 応答コールバック
- */
-function handleChannelChanged(message, sendResponse) {
-  console.log(`チャンネル変更通知を受信: ${message.from} -> ${message.to}`);
-  const settings = Settings.getSettings();
-  
-  // チャンネルごとの翻訳履歴管理を将来実装する場合はここで処理
-  sendResponse({ 
-    success: true,
-    settings: {
-      enabled: settings.enabled,
-      processExistingMessages: settings.processExistingMessages
-    }
-  });
-}
-
-// 拡張機能のアンロード時にキャッシュと統計情報を保存
-chrome.runtime.onSuspend.addListener(() => {
-  console.log("拡張機能が停止されます。キャッシュと統計情報を保存します。");
-  Cache.saveCache(true);
-  Stats.saveStats();
-});
-
-// 定期的にキャッシュと統計情報を保存する関数
-function schedulePeriodicalSaves() {
-  // 1時間ごとにキャッシュと統計情報を保存
-  setInterval(() => {
-    Cache.saveCache();
-    Stats.saveStats();
-  }, 60 * 60 * 1000);
-}
-
-// 初期化処理
-async function initialize() {
-  try {
-    console.log("Twitch Gemini Translator: バックグラウンドスクリプト初期化開始");
+    logger.info('拡張機能を初期化中...', 'background');
     
     // 設定を読み込む
-    await Settings.loadSettings();
-    const settings = Settings.getSettings();
-    console.log("設定を読み込みました:", settings);
+    const settings = await loadSettings();
+    
+    // ロガーの設定を更新
+    logger.configure({
+      level: settings.debugMode ? logger.LOG_LEVELS.DEBUG : logger.LOG_LEVELS.INFO
+    });
+    
+    // キャッシュを初期化
+    await initializeCache();
+    
+    // リクエストキューを初期化
+    initializeRequestQueue({
+      maxConcurrentRequests: settings.maxConcurrentRequests,
+      requestDelay: settings.requestDelay
+    });
     
     // 統計情報を読み込む
-    await Stats.loadStats();
+    await loadStats();
     
-    // キャッシュを読み込む
-    if (settings.useCache) {
-      await Cache.loadCache();
-    }
+    // 翻訳機能の有効状態を設定
+    appState.translationEnabled = settings.enabled;
+    appState.apiKeyValid = !!settings.apiKey;
     
-    // 定期保存をスケジュール
-    schedulePeriodicalSaves();
+    // 初期化完了
+    appState.initialized = true;
+    logger.info('拡張機能の初期化が完了しました', 'background', { 
+      translationEnabled: appState.translationEnabled,
+      apiKeyValid: appState.apiKeyValid
+    });
     
-    console.log("Twitch Gemini Translator: バックグラウンドスクリプト初期化完了");
+    // 定期的な統計情報の保存を設定
+    setInterval(periodicSave, 5 * 60 * 1000); // 5分ごと
+    
+    // アクティブタブの変更を監視
+    chrome.tabs.onActivated.addListener(handleTabActivated);
+    
+    // タブの更新を監視
+    chrome.tabs.onUpdated.addListener(handleTabUpdated);
+    
+    return true;
   } catch (error) {
-    console.error("初期化中にエラーが発生しました:", error);
+    appState.initializationError = error;
+    appState.initialized = false;
+    
+    // エラーを処理
+    errorHandler.handleError(error, {
+      source: 'background',
+      code: 'internal_error',
+      details: '拡張機能の初期化中にエラーが発生しました'
+    });
+    
+    logger.error('拡張機能の初期化に失敗しました', 'background', { error });
+    return false;
   }
 }
 
-// 初期化の実行
-initialize();
+/**
+ * 定期的な保存処理
+ */
+async function periodicSave() {
+  try {
+    const now = Date.now();
+    
+    // 前回の保存から5分以上経過している場合のみ保存
+    if (now - appState.lastSaveTime >= 5 * 60 * 1000) {
+      await saveStats();
+      appState.lastSaveTime = now;
+      logger.debug('統計情報を定期保存しました', 'background');
+    }
+  } catch (error) {
+    errorHandler.handleError(error, {
+      source: 'background',
+      code: 'storage_write_error',
+      details: '統計情報の定期保存中にエラーが発生しました'
+    });
+  }
+}
+
+/**
+ * アクティブタブが変更された時の処理
+ * @param {object} activeInfo アクティブタブ情報
+ */
+function handleTabActivated(activeInfo) {
+  appState.activeTabId = activeInfo.tabId;
+  
+  // Twitchタブかどうかを確認
+  chrome.tabs.get(activeInfo.tabId, (tab) => {
+    const isTwitchTab = tab.url && tab.url.includes('twitch.tv');
+    logger.debug('アクティブタブが変更されました', 'background', { 
+      tabId: activeInfo.tabId,
+      isTwitchTab,
+      url: tab.url
+    });
+  });
+}
+
+/**
+ * タブが更新された時の処理
+ * @param {number} tabId タブID
+ * @param {object} changeInfo 変更情報
+ * @param {object} tab タブ情報
+ */
+function handleTabUpdated(tabId, changeInfo, tab) {
+  // URLが変更され、Twitchページの場合
+  if (changeInfo.url && changeInfo.url.includes('twitch.tv')) {
+    logger.debug('Twitchタブが更新されました', 'background', { 
+      tabId,
+      url: changeInfo.url
+    });
+  }
+}
+
+/**
+ * メッセージハンドラーのマッピング
+ */
+const messageHandlers = {
+  // 翻訳リクエスト
+  'translate': async (request, sender, sendResponse) => {
+    try {
+      const settings = getSettings();
+      
+      // 翻訳が無効または初期化されていない場合
+      if (!appState.initialized || !settings.enabled) {
+        return { success: false, error: '翻訳機能が無効です' };
+      }
+      
+      // APIキーが設定されていない場合
+      if (!settings.apiKey) {
+        return { success: false, error: 'APIキーが設定されていません' };
+      }
+      
+      // 翻訳を実行
+      const result = await translateText(request.text, request.options);
+      return { success: true, translation: result };
+    } catch (error) {
+      // エラーを処理
+      const errorInfo = errorHandler.handleError(error, {
+        source: 'translator',
+        code: 'translation_failed',
+        details: `テキスト「${utils.truncateString(request.text, 50)}」の翻訳中にエラーが発生しました`
+      });
+      
+      return { success: false, error: errorInfo.message };
+    }
+  },
+  
+  // コンテンツスクリプトからのメッセージ翻訳リクエスト
+  'translateMessage': async (request, sender, sendResponse) => {
+    try {
+      logger.debug('メッセージ翻訳リクエストを受信しました', 'background', { 
+        message: utils.truncateString(request.message, 50),
+        tabId: sender.tab?.id
+      });
+      
+      const settings = getSettings();
+      
+      // 翻訳が無効または初期化されていない場合
+      if (!appState.initialized || !settings.enabled) {
+        return { success: false, error: '翻訳機能が無効です' };
+      }
+      
+      // APIキーが設定されていない場合
+      if (!settings.apiKey) {
+        return { success: false, error: 'APIキーが設定されていません' };
+      }
+      
+      // 翻訳を実行
+      const result = await translateText(
+        request.message, 
+        settings.apiKey,
+        'auto'
+      );
+      
+      if (!result.success) {
+        throw new Error(result.error || '翻訳に失敗しました');
+      }
+      
+      logger.debug('メッセージ翻訳が完了しました', 'background', { 
+        original: utils.truncateString(request.message, 30),
+        translation: utils.truncateString(result.translation, 30)
+      });
+      
+      return { success: true, translation: result.translation };
+    } catch (error) {
+      // エラーを処理
+      const errorInfo = errorHandler.handleError(error, {
+        source: 'translator',
+        code: 'translation_failed',
+        details: `メッセージ「${utils.truncateString(request.message, 50)}」の翻訳中にエラーが発生しました`
+      });
+      
+      logger.error('メッセージ翻訳に失敗しました', 'background', { 
+        error: errorInfo.message,
+        message: utils.truncateString(request.message, 50)
+      });
+      
+      return { success: false, error: errorInfo.message };
+    }
+  },
+  
+  // 設定の取得
+  'getSettings': async (request, sender, sendResponse) => {
+    try {
+      const settings = getSettings();
+      return { success: true, settings };
+    } catch (error) {
+      const errorInfo = errorHandler.handleError(error, {
+        source: 'background',
+        code: 'storage_read_error',
+        details: '設定の取得中にエラーが発生しました'
+      });
+      
+      return { success: false, error: errorInfo.message };
+    }
+  },
+  
+  // 拡張機能の状態を取得
+  'getStatus': async (request, sender, sendResponse) => {
+    try {
+      const settings = getSettings();
+      
+      return {
+        success: true,
+        status: {
+          initialized: appState.initialized,
+          enabled: settings.enabled,
+          apiKeyValid: !!settings.apiKey,
+          debugMode: settings.debugMode
+        }
+      };
+    } catch (error) {
+      const errorInfo = errorHandler.handleError(error, {
+        source: 'background',
+        code: 'internal_error',
+        details: '拡張機能の状態取得中にエラーが発生しました'
+      });
+      
+      return { success: false, error: errorInfo.message };
+    }
+  },
+  
+  // 拡張機能の有効/無効を切り替え
+  'toggleEnabled': async (request, sender, sendResponse) => {
+    try {
+      const settings = getSettings();
+      settings.enabled = request.enabled;
+      
+      // 設定を保存
+      await chrome.storage.local.set({ translatorSettings: settings });
+      
+      // アプリケーションの状態を更新
+      appState.translationEnabled = settings.enabled;
+      
+      // 他のタブに通知
+      chrome.tabs.query({}, (tabs) => {
+        tabs.forEach(tab => {
+          if (tab.id !== sender.tab?.id) {
+            chrome.tabs.sendMessage(tab.id, {
+              action: 'settingsUpdated',
+              settings
+            }).catch(() => {
+              // エラーは無視（タブが閉じられている可能性がある）
+            });
+          }
+        });
+      });
+      
+      logger.info(`翻訳機能を${settings.enabled ? '有効' : '無効'}にしました`, 'background');
+      
+      return { success: true };
+    } catch (error) {
+      const errorInfo = errorHandler.handleError(error, {
+        source: 'background',
+        code: 'storage_write_error',
+        details: '設定の保存中にエラーが発生しました'
+      });
+      
+      return { success: false, error: errorInfo.message };
+    }
+  },
+  
+  // APIキーを更新
+  'updateApiKey': async (request, sender, sendResponse) => {
+    try {
+      const settings = getSettings();
+      settings.apiKey = request.apiKey;
+      
+      // 設定を保存
+      await chrome.storage.local.set({ translatorSettings: settings });
+      
+      // アプリケーションの状態を更新
+      appState.apiKeyValid = !!settings.apiKey;
+      
+      // 他のタブに通知
+      chrome.tabs.query({}, (tabs) => {
+        tabs.forEach(tab => {
+          chrome.tabs.sendMessage(tab.id, {
+            action: 'apiKeyUpdated',
+            hasKey: !!settings.apiKey
+          }).catch(() => {
+            // エラーは無視（タブが閉じられている可能性がある）
+          });
+        });
+      });
+      
+      logger.info('APIキーを更新しました', 'background', { hasKey: !!settings.apiKey });
+      
+      return { success: true };
+    } catch (error) {
+      const errorInfo = errorHandler.handleError(error, {
+        source: 'background',
+        code: 'storage_write_error',
+        details: 'APIキーの保存中にエラーが発生しました'
+      });
+      
+      return { success: false, error: errorInfo.message };
+    }
+  },
+  
+  // キャッシュをクリア
+  'clearCache': async (request, sender, sendResponse) => {
+    try {
+      // キャッシュをクリア
+      const clearedItems = await clearCache();
+      
+      logger.info(`キャッシュをクリアしました (${clearedItems}アイテム)`, 'background');
+      
+      return { success: true, clearedItems };
+    } catch (error) {
+      const errorInfo = errorHandler.handleError(error, {
+        source: 'background',
+        code: 'cache_clear_error',
+        details: 'キャッシュのクリア中にエラーが発生しました'
+      });
+      
+      return { success: false, error: errorInfo.message };
+    }
+  },
+  
+  // 統計情報を取得
+  'getStats': async (request, sender, sendResponse) => {
+    try {
+      const stats = await getStats();
+      return { success: true, stats };
+    } catch (error) {
+      const errorInfo = errorHandler.handleError(error, {
+        source: 'background',
+        code: 'storage_read_error',
+        details: '統計情報の取得中にエラーが発生しました'
+      });
+      
+      return { success: false, error: errorInfo.message };
+    }
+  },
+  
+  // ログを取得
+  'getLogs': async (request, sender, sendResponse) => {
+    try {
+      const count = request.count || 50;
+      const minLevel = request.minLevel || logger.LOG_LEVELS.INFO;
+      
+      const logs = logger.getLogs(count, minLevel);
+      return { success: true, logs };
+    } catch (error) {
+      const errorInfo = errorHandler.handleError(error, {
+        source: 'background',
+        code: 'internal_error',
+        details: 'ログの取得中にエラーが発生しました'
+      });
+      
+      return { success: false, error: errorInfo.message };
+    }
+  }
+};
+
+/**
+ * メッセージハンドラー
+ * @param {object} request リクエスト
+ * @param {object} sender 送信者
+ * @param {function} sendResponse レスポンス送信関数
+ * @returns {boolean} 非同期処理を行うかどうか
+ */
+function handleMessage(request, sender, sendResponse) {
+  try {
+    // アクションが指定されていない場合
+    if (!request || !request.action) {
+      sendResponse({ success: false, error: '無効なリクエスト: アクションが指定されていません' });
+      return false;
+    }
+    
+    // ハンドラーが存在するか確認
+    const handler = messageHandlers[request.action];
+    if (!handler) {
+      logger.warn(`不明なアクション: ${request.action}`, 'background');
+      sendResponse({ success: false, error: `不明なアクション: ${request.action}` });
+      return false;
+    }
+    
+    // 非同期ハンドラーを実行
+    handler(request, sender, sendResponse)
+      .then(response => {
+        sendResponse(response);
+      })
+      .catch(error => {
+        const errorInfo = errorHandler.handleError(error, {
+          source: 'background',
+          code: 'message_handler_error',
+          details: `メッセージハンドラー「${request.action}」でエラーが発生しました`
+        });
+        
+        sendResponse({ success: false, error: errorInfo.message });
+      });
+    
+    // 非同期レスポンスを有効にする
+    return true;
+  } catch (error) {
+    const errorInfo = errorHandler.handleError(error, {
+      source: 'background',
+      code: 'message_handling_error',
+      details: 'メッセージ処理中にエラーが発生しました'
+    });
+    
+    sendResponse({ success: false, error: errorInfo.message });
+    return false;
+  }
+}
+
+// メッセージリスナーを登録
+chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+  // 非同期レスポンスを有効にする
+  const asyncResponse = handleMessage(request, sender, sendResponse);
+  return asyncResponse;
+});
+
+// 拡張機能を初期化
+initializeExtension();

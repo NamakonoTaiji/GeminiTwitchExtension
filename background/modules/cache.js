@@ -7,202 +7,305 @@
 import { getSettings } from './settings.js';
 import { incrementCacheHits, incrementTotalRequests } from './stats.js';
 
-// 翻訳キャッシュ
-const translationCache = new Map();
-const MAX_CACHE_SIZE = 1000; // 最大キャッシュサイズ
+// キャッシュのデフォルト設定
+const DEFAULT_CACHE_EXPIRATION = 24 * 60 * 60 * 1000; // 24時間（ミリ秒）
+const DEFAULT_MAX_CACHE_SIZE = 1000; // 最大キャッシュエントリ数
 
-// 最後にキャッシュを保存した時間
-let lastCacheSave = Date.now();
-
-/**
- * キャッシュを読み込む
- * @returns {Promise<number>} 読み込まれたキャッシュエントリの数
- */
-export async function loadCache() {
-  const settings = getSettings();
-  
-  if (!settings.useCache) {
-    return 0;
-  }
-  
-  try {
-    const savedCache = await chrome.storage.local.get('translationCache');
-    if (!savedCache.translationCache) {
-      return 0;
-    }
-    
-    const now = Date.now();
-    const maxAge = settings.maxCacheAge * 60 * 60 * 1000; // 時間をミリ秒に変換
-    
-    // 期限内のキャッシュのみ復元
-    let restoredCount = 0;
-    Object.entries(savedCache.translationCache).forEach(([key, entry]) => {
-      if (now - entry.timestamp < maxAge) {
-        translationCache.set(key, entry);
-        restoredCount++;
-      }
-    });
-    
-    console.log(`${restoredCount}件のキャッシュをロードしました`);
-    return restoredCount;
-  } catch (error) {
-    console.error('キャッシュの読み込みに失敗:', error);
-    return 0;
-  }
-}
+// キャッシュオブジェクト
+let translationCache = {};
+let cacheInitialized = false;
 
 /**
- * キャッシュを保存
- * @param {boolean} force 強制保存するかどうか
- * @returns {Promise<boolean>} 保存に成功したかどうか
- */
-export async function saveCache(force = false) {
-  const settings = getSettings();
-  
-  if (!settings.useCache || translationCache.size === 0) {
-    return false;
-  }
-  
-  // 30分ごとに保存、または強制保存
-  const now = Date.now();
-  if (!force && now - lastCacheSave < 30 * 60 * 1000) {
-    return false;
-  }
-  
-  try {
-    // MapオブジェクトをObjectに変換
-    const cacheObject = {};
-    translationCache.forEach((value, key) => {
-      cacheObject[key] = value;
-    });
-    
-    await chrome.storage.local.set({ translationCache: cacheObject });
-    console.log(`${translationCache.size}件のキャッシュを保存しました`);
-    
-    lastCacheSave = now;
-    return true;
-  } catch (error) {
-    console.error('キャッシュの保存に失敗:', error);
-    return false;
-  }
-}
-
-/**
- * キャッシュからの翻訳取得
+ * キャッシュキーを生成
  * @param {string} text 元のテキスト
  * @param {string} sourceLang ソース言語
- * @returns {object|null} キャッシュされた翻訳結果またはnull
+ * @returns {string} キャッシュキー
+ */
+function generateCacheKey(text, sourceLang) {
+  return `${sourceLang}:${text}`;
+}
+
+/**
+ * キャッシュからの翻訳結果の取得
+ * @param {string} text 元のテキスト
+ * @param {string} sourceLang ソース言語
+ * @returns {object|null} キャッシュされた翻訳結果、またはnull
  */
 export function getCachedTranslation(text, sourceLang) {
+  if (!text) return null;
+  
   const settings = getSettings();
   
+  // キャッシュが無効の場合はnullを返す
   if (!settings.useCache) {
     return null;
   }
   
-  const cacheKey = `${sourceLang}:${text}`;
-  const cachedEntry = translationCache.get(cacheKey);
+  // キャッシュが初期化されていない場合は初期化
+  if (!cacheInitialized) {
+    loadCache();
+    return null; // 初回は常にnullを返す（非同期ロードのため）
+  }
   
-  if (!cachedEntry) {
+  const cacheKey = generateCacheKey(text, sourceLang);
+  const cachedItem = translationCache[cacheKey];
+  
+  // キャッシュアイテムが存在しない場合はnullを返す
+  if (!cachedItem) {
     return null;
   }
   
-  // キャッシュの有効期限をチェック
-  const now = Date.now();
-  const maxAge = settings.maxCacheAge * 60 * 60 * 1000; // 時間をミリ秒に変換
-  
-  if (now - cachedEntry.timestamp > maxAge) {
-    // 期限切れのキャッシュを削除
-    translationCache.delete(cacheKey);
+  // 有効期限切れの場合はキャッシュから削除してnullを返す
+  if (Date.now() > cachedItem.expiresAt) {
+    console.log(`キャッシュ期限切れ: "${text.substring(0, 20)}..."`);
+    delete translationCache[cacheKey];
     return null;
   }
   
-  // キャッシュヒットの統計を更新
-  incrementTotalRequests();
+  // キャッシュヒットをカウント
   incrementCacheHits();
   
-  // キャッシュのタイムスタンプを更新（アクセス時間の更新）
-  cachedEntry.timestamp = now;
-  translationCache.set(cacheKey, cachedEntry);
+  // 最終アクセス時間を更新
+  cachedItem.lastAccessed = Date.now();
   
-  // キャッシュからの結果にはエンジン情報を追加
-  const result = cachedEntry.translation;
-  if (result && !result.engine) {
-    result.engine = 'cached';
-  }
-  
-  return result;
+  return cachedItem.data;
 }
 
 /**
- * キャッシュに翻訳を保存
+ * 翻訳結果をキャッシュに保存
  * @param {string} text 元のテキスト
  * @param {string} sourceLang ソース言語
  * @param {object} translationResult 翻訳結果
- * @returns {boolean} 保存に成功したかどうか
  */
 export function cacheTranslation(text, sourceLang, translationResult) {
+  if (!text || !translationResult || !translationResult.success) {
+    return;
+  }
+  
   const settings = getSettings();
   
-  if (!settings.useCache || !translationResult.success) {
-    return false;
+  // キャッシュが無効の場合は何もしない
+  if (!settings.useCache) {
+    return;
   }
   
-  const cacheKey = `${sourceLang}:${text}`;
-  
-  // キャッシュが最大サイズに達した場合、最も古いエントリを削除
-  if (translationCache.size >= MAX_CACHE_SIZE) {
-    let oldestKey = null;
-    let oldestTime = Date.now();
-    
-    translationCache.forEach((entry, key) => {
-      if (entry.timestamp < oldestTime) {
-        oldestTime = entry.timestamp;
-        oldestKey = key;
-      }
-    });
-    
-    if (oldestKey) {
-      translationCache.delete(oldestKey);
-    }
+  // キャッシュが初期化されていない場合は初期化
+  if (!cacheInitialized) {
+    loadCache();
+    return; // 初期化中は保存しない
   }
   
-  // 新しい翻訳をキャッシュに追加
-  translationCache.set(cacheKey, {
-    translation: translationResult,
-    timestamp: Date.now()
-  });
-  
-  // 30分ごとにキャッシュを保存
+  const cacheKey = generateCacheKey(text, sourceLang);
   const now = Date.now();
-  if (now - lastCacheSave > 30 * 60 * 1000) {
-    saveCache();
+  
+  // キャッシュ有効期限を設定（設定から取得、またはデフォルト値を使用）
+  const cacheExpiration = settings.cacheExpiration || DEFAULT_CACHE_EXPIRATION;
+  
+  // キャッシュアイテムを作成
+  translationCache[cacheKey] = {
+    data: translationResult,
+    createdAt: now,
+    lastAccessed: now,
+    expiresAt: now + cacheExpiration,
+  };
+  
+  // キャッシュサイズが上限を超えた場合は古いアイテムを削除
+  pruneCache();
+  
+  // 定期的にキャッシュを保存
+  scheduleCacheSave();
+}
+
+/**
+ * キャッシュサイズが上限を超えた場合に古いアイテムを削除
+ */
+function pruneCache() {
+  const settings = getSettings();
+  const maxCacheSize = settings.maxCacheSize || DEFAULT_MAX_CACHE_SIZE;
+  const cacheSize = Object.keys(translationCache).length;
+  
+  if (cacheSize <= maxCacheSize) {
+    return;
   }
   
-  return true;
+  console.log(`キャッシュサイズ (${cacheSize}) が上限 (${maxCacheSize}) を超えました。古いアイテムを削除します。`);
+  
+  // キャッシュアイテムを最終アクセス時間でソート
+  const sortedItems = Object.entries(translationCache).sort(
+    ([, a], [, b]) => a.lastAccessed - b.lastAccessed
+  );
+  
+  // 削除する数を計算（上限の20%を削除）
+  const itemsToRemove = Math.ceil((cacheSize - maxCacheSize) + (maxCacheSize * 0.2));
+  
+  // 古いアイテムから順に削除
+  for (let i = 0; i < itemsToRemove && i < sortedItems.length; i++) {
+    const [key] = sortedItems[i];
+    delete translationCache[key];
+  }
+  
+  console.log(`${itemsToRemove}個のキャッシュアイテムを削除しました。新しいサイズ: ${Object.keys(translationCache).length}`);
+}
+
+/**
+ * キャッシュを定期的に保存するスケジューリング
+ */
+let cacheSaveTimeout = null;
+function scheduleCacheSave() {
+  // 既存のタイムアウトをクリア
+  if (cacheSaveTimeout) {
+    clearTimeout(cacheSaveTimeout);
+  }
+  
+  // 30秒後にキャッシュを保存
+  cacheSaveTimeout = setTimeout(() => {
+    saveCache();
+    cacheSaveTimeout = null;
+  }, 30000);
+}
+
+/**
+ * キャッシュサイズを取得
+ * @returns {number} キャッシュエントリ数
+ */
+export function getCacheSize() {
+  return Object.keys(translationCache).length;
 }
 
 /**
  * キャッシュをクリア
- * @returns {number} クリアされたエントリ数
+ * @returns {number} クリア前のキャッシュサイズ
  */
 export function clearCache() {
-  const previousSize = translationCache.size;
-  translationCache.clear();
+  const previousSize = getCacheSize();
   
-  try {
-    chrome.storage.local.remove('translationCache');
-  } catch (error) {
-    console.error('キャッシュ削除中のエラー:', error);
-  }
+  // キャッシュをクリア
+  translationCache = {};
+  
+  // キャッシュの保存
+  saveCache(true);
   
   return previousSize;
 }
 
 /**
- * 現在のキャッシュサイズを取得
- * @returns {number} キャッシュされているエントリ数
+ * キャッシュを保存
+ * @param {boolean} force 強制保存フラグ
  */
-export function getCacheSize() {
-  return translationCache.size;
+export async function saveCache(force = false) {
+  const settings = getSettings();
+  
+  // キャッシュが無効で、強制保存でない場合は何もしない
+  if (!settings.useCache && !force) {
+    return 0;
+  }
+  
+  // 保存するキャッシュアイテムを準備
+  const cacheData = {};
+  let count = 0;
+  
+  // 有効期限内のアイテムのみを保存
+  const now = Date.now();
+  Object.entries(translationCache).forEach(([key, item]) => {
+    if (now < item.expiresAt) {
+      cacheData[key] = item;
+      count++;
+    }
+  });
+  
+  // キャッシュが空の場合は何もしない
+  if (count === 0 && !force) {
+    return 0;
+  }
+  
+  try {
+    // キャッシュをストレージに保存（オブジェクトとして直接保存）
+    await chrome.storage.local.set({ translationCache: cacheData });
+    console.log(`キャッシュを保存しました (${count}アイテム)`);
+    return count;
+  } catch (error) {
+    console.error("キャッシュの保存に失敗:", error);
+    return 0;
+  }
+}
+
+/**
+ * キャッシュをロード
+ * @returns {Promise<number>} ロードされたキャッシュエントリ数
+ */
+export async function loadCache() {
+  try {
+    const settings = getSettings();
+    
+    // キャッシュが無効の場合は空のキャッシュを設定
+    if (!settings.useCache) {
+      translationCache = {};
+      cacheInitialized = true;
+      return 0;
+    }
+    
+    // ストレージからキャッシュを読み込み
+    const data = await chrome.storage.local.get(["translationCache"]);
+    
+    // キャッシュデータが存在しない場合は空のキャッシュを設定
+    if (!data.translationCache) {
+      translationCache = {};
+      cacheInitialized = true;
+      return 0;
+    }
+    
+    // キャッシュデータを取得（文字列の場合はパース、オブジェクトの場合はそのまま使用）
+    let storedCache;
+    if (typeof data.translationCache === 'string') {
+      try {
+        storedCache = JSON.parse(data.translationCache);
+      } catch (parseError) {
+        console.error("キャッシュのパースに失敗:", parseError);
+        translationCache = {};
+        cacheInitialized = true;
+        return 0;
+      }
+    } else {
+      storedCache = data.translationCache;
+    }
+    
+    // 有効期限内のアイテムのみを読み込み
+    const now = Date.now();
+    let count = 0;
+    
+    translationCache = {};
+    Object.entries(storedCache).forEach(([key, item]) => {
+      if (now < item.expiresAt) {
+        translationCache[key] = item;
+        count++;
+      }
+    });
+    
+    cacheInitialized = true;
+    console.log(`キャッシュを読み込みました (${count}アイテム)`);
+    
+    return count;
+  } catch (error) {
+    console.error("キャッシュの読み込みに失敗:", error);
+    translationCache = {};
+    cacheInitialized = true;
+    return 0;
+  }
+}
+
+/**
+ * キャッシュの初期化
+ * @returns {Promise<boolean>} 初期化が成功したかどうか
+ */
+export async function initializeCache() {
+  try {
+    const count = await loadCache();
+    console.log(`キャッシュを初期化しました (${count}アイテム)`);
+    return true;
+  } catch (error) {
+    console.error("キャッシュの初期化に失敗:", error);
+    translationCache = {};
+    cacheInitialized = true;
+    return false;
+  }
 }
