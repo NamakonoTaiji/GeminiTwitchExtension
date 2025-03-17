@@ -11,34 +11,27 @@ const DEFAULT_SETTINGS = {
   apiKey: "",                       // Gemini APIキー
   
   // 翻訳設定
-  translationMode: "auto",          // 翻訳モード: auto, gemini, chrome
-  targetLanguage: "ja",             // 翻訳先言語
-  processExistingMessages: true,    // 既存メッセージの処理
+  translationMode: "selective",      // 翻訳モード: selective（選択的）, all（すべて）, english（英語のみ）
+  japaneseThreshold: 30,            // 日本語判定しきい値（%）
+  englishThreshold: 50,             // 英語判定しきい値（%）
+  processExistingMessages: false,   // 既存メッセージの処理
   
   // 表示設定
-  displayMode: "inline",            // 表示モード: inline, bubble
-  translatedTextColor: "#4CAF50",   // 翻訳テキストの色
-  fontSize: "100",                  // フォントサイズ（%）
+  displayPrefix: "🇯🇵",             // 翻訳テキストの接頭辞
+  textColor: "#9b9b9b",             // 翻訳テキストの色
+  accentColor: "#4db6ac",           // アクセントカラー
+  fontSize: "medium",               // フォントサイズ: small, medium, large
   
   // キャッシュ設定
   useCache: true,                   // キャッシュ使用
-  cacheExpiration: 24 * 60 * 60 * 1000, // キャッシュ有効期限（ミリ秒）
-  maxCacheSize: 1000,               // 最大キャッシュサイズ
+  maxCacheAge: 24,                  // キャッシュ有効期間（時間）
   
   // API設定
-  geminiModel: "gemini-2.0-flash-lite", // 使用するGeminiモデル
-  maxConcurrentRequests: 3,         // 最大同時リクエスト数
-  requestDelay: 500,                // リクエスト間の遅延（ミリ秒）
-  
-  // フィルタ設定
-  ignoreUsernames: [],              // 無視するユーザー名
-  ignorePatterns: [],               // 無視するパターン
-  minMessageLength: 1,              // 最小メッセージ長
-  maxMessageLength: 500,            // 最大メッセージ長
+  geminiModel: "gemini-2.0-flash-lite", // 使用するGeminiモデル: gemini-2.0-flash-lite, gemini-2.0-flash
+  requestDelay: 100,                // リクエスト間の遅延（ミリ秒）
   
   // 詳細設定
   debugMode: false,                 // デバッグモード
-  logLevel: "info",                 // ログレベル: debug, info, warn, error
 };
 
 // 現在の設定
@@ -91,25 +84,23 @@ export async function loadSettings() {
  */
 function validateSettings() {
   // 数値型の設定を検証
-  ensureNumericValue('fontSize', 50, 200);
-  ensureNumericValue('maxCacheSize', 100, 10000);
-  ensureNumericValue('maxConcurrentRequests', 1, 10);
-  ensureNumericValue('requestDelay', 100, 5000);
-  ensureNumericValue('minMessageLength', 1, 100);
-  ensureNumericValue('maxMessageLength', 10, 2000);
+  ensureNumericValue('japaneseThreshold', 10, 50);
+  ensureNumericValue('englishThreshold', 30, 70);
+  ensureNumericValue('maxCacheAge', 1, 168);
+  ensureNumericValue('requestDelay', 0, 1000);
   
   // 列挙型の設定を検証
-  ensureEnumValue('translationMode', ['auto', 'gemini', 'chrome'], 'auto');
-  ensureEnumValue('displayMode', ['inline', 'bubble'], 'inline');
-  ensureEnumValue('logLevel', ['debug', 'info', 'warn', 'error'], 'info');
-  
-  // 配列型の設定を検証
-  ensureArrayValue('ignoreUsernames');
-  ensureArrayValue('ignorePatterns');
+  ensureEnumValue('translationMode', ['selective', 'all', 'english'], 'selective');
+  ensureEnumValue('fontSize', ['small', 'medium', 'large'], 'medium');
+  ensureEnumValue('geminiModel', ['gemini-2.0-flash-lite', 'gemini-2.0-flash'], 'gemini-2.0-flash-lite');
   
   // 色の検証
-  if (!/^#[0-9A-F]{6}$/i.test(currentSettings.translatedTextColor)) {
-    currentSettings.translatedTextColor = DEFAULT_SETTINGS.translatedTextColor;
+  if (!/^#[0-9A-F]{6}$/i.test(currentSettings.textColor)) {
+    currentSettings.textColor = DEFAULT_SETTINGS.textColor;
+  }
+  
+  if (!/^#[0-9A-F]{6}$/i.test(currentSettings.accentColor)) {
+    currentSettings.accentColor = DEFAULT_SETTINGS.accentColor;
   }
 }
 

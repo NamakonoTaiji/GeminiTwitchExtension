@@ -335,16 +335,22 @@ async function processMessage(messageElement) {
     
     // 翻訳リクエスト
     try {
-      debugLog('翻訳リクエストを送信:', messageText);
-      const response = await sendMessageToBackground('translateMessage', { message: messageText });
-      
-      if (response && response.success) {
-        // 翻訳をキャッシュ
-        translatedMessages.set(messageText, response.translation);
-        debugLog('翻訳結果を受信:', response.translation);
+    debugLog('翻訳リクエストを送信:', messageText);
+    const response = await sendMessageToBackground('translateMessage', { message: messageText });
+    
+    if (response && response.success) {
+    // 翻訳をキャッシュ
+    translatedMessages.set(messageText, response.translation);
+    debugLog('翻訳結果を受信:', response.translation);
+    
+    // 表示オプションを設定
+    const displayOptions = {
+        model: response.model || 'Gemini',
+      sourceLanguage: response.sourceLanguage || 'unknown'
+      };
         
-        // 翻訳を表示
-        displayTranslation(messageElement, response.translation);
+      // 翻訳を表示
+        displayTranslation(messageElement, response.translation, displayOptions);
       } else {
         console.warn('[Twitch Translator] 翻訳エラー:', response?.error || '不明なエラー');
       }
@@ -364,17 +370,44 @@ async function processMessage(messageElement) {
  * 翻訳を表示
  * @param {Element} messageElement メッセージ要素
  * @param {string} translation 翻訳テキスト
+ * @param {object} options 表示オプション
  */
-function displayTranslation(messageElement, translation) {
+function displayTranslation(messageElement, translation, options = {}) {
   if (!messageElement || !translation) return;
   
   try {
     debugLog('翻訳を表示:', translation);
     
+    // 設定の取得とデフォルト値の設定
+    const displaySettings = {
+      prefix: appState.settings.displayPrefix || '🇯🇵',
+      textColor: appState.settings.textColor || '#9b9b9b',
+      accentColor: appState.settings.accentColor || '#4db6ac',
+      fontSize: appState.settings.fontSize || 'medium',
+      ...options
+    };
+    
+    // フォントサイズを決定
+    let fontSizeValue = '0.9em';
+    switch (displaySettings.fontSize) {
+      case 'small':
+        fontSizeValue = '0.8em';
+        break;
+      case 'medium':
+        fontSizeValue = '0.9em';
+        break;
+      case 'large':
+        fontSizeValue = '1em';
+        break;
+    }
+    
+    // 翻訳エンジン情報を取得
+    const modelInfo = options.model || 'Gemini';
+    
     // 既に翻訳が表示されている場合は更新
     const existingTranslation = messageElement.querySelector('.twitch-translator-translation');
     if (existingTranslation) {
-      existingTranslation.textContent = translation;
+      existingTranslation.textContent = `${displaySettings.prefix} ${translation}`;
       debugLog('既存の翻訳を更新しました');
       return;
     }
@@ -382,10 +415,17 @@ function displayTranslation(messageElement, translation) {
     // 翻訳表示要素を作成
     const translationElement = document.createElement('div');
     translationElement.className = 'twitch-translator-translation';
-    translationElement.textContent = translation;
-    translationElement.style.color = '#a970ff';
+    translationElement.textContent = `${displaySettings.prefix} ${translation}`;
+    
+    // スタイルを設定
+    translationElement.style.color = displaySettings.textColor;
+    translationElement.style.fontSize = fontSizeValue;
+    translationElement.style.marginTop = '4px';
+    translationElement.style.marginLeft = '20px';
     translationElement.style.fontStyle = 'italic';
-    translationElement.style.marginTop = '2px';
+    translationElement.style.padding = '2px 0';
+    translationElement.style.borderLeft = `3px solid ${displaySettings.accentColor}`;
+    translationElement.style.paddingLeft = '8px';
     
     // メッセージコンテナを取得（複数のセレクタを試行）
     const containerSelectors = [
@@ -410,7 +450,20 @@ function displayTranslation(messageElement, translation) {
       messageContainer.appendChild(translationElement);
       debugLog('翻訳を挿入しました');
     } else {
-      debugLog('翻訳表示用コンテナが見つかりません', messageElement);
+      // 代替手段としてメッセージ要素の後に掛ける
+      try {
+        if (messageElement.parentElement) {
+          messageElement.parentElement.insertBefore(
+            translationElement,
+            messageElement.nextSibling
+          );
+          debugLog('代替手段で翻訳を挿入しました');
+        } else {
+          debugLog('翻訳表示用コンテナが見つかりません', messageElement);
+        }
+      } catch (error) {
+        console.error('[Twitch Translator] 代替手段での翻訳挿入エラー:', error);
+      }
     }
   } catch (error) {
     console.error('[Twitch Translator] 翻訳表示エラー:', error);

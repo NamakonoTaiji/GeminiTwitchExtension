@@ -163,11 +163,13 @@ function extractTranslationFromResponse(data, sourceLang) {
 /**
  * テキストを翻訳（キャッシュチェック付き）
  * @param {string} text 翻訳するテキスト
- * @param {string} apiKey Gemini APIキー
- * @param {string} sourceLang ソース言語 (デフォルト: "auto")
+ * @param {object} options 翻訳オプション
  * @returns {Promise<object>} 翻訳結果
  */
-export async function translateText(text, apiKey, sourceLang = "auto") {
+export async function translateText(text, options = {}) {
+  // 設定を取得
+  const settings = getSettings();
+  
   // 入力検証
   if (!text || text.trim().length === 0) {
     return {
@@ -175,15 +177,22 @@ export async function translateText(text, apiKey, sourceLang = "auto") {
       error: "翻訳するテキストが空です",
     };
   }
+  
+  // オプションの設定
+  const translationOptions = {
+    model: options.model || settings.geminiModel || "gemini-2.0-flash-lite",
+    sourceLanguage: options.sourceLanguage || "auto",
+    targetLanguage: options.targetLanguage || "ja"
+  };
 
   // キャッシュをチェック
-  const cachedResult = getCachedTranslation(text, sourceLang);
+  const cachedResult = getCachedTranslation(text, translationOptions.sourceLanguage);
   if (cachedResult) {
     return cachedResult;
   }
 
   // APIキーがない場合はエラー
-  if (!apiKey) {
+  if (!settings.apiKey) {
     return {
       success: false,
       error: "Gemini APIキーが設定されていません",
@@ -195,11 +204,18 @@ export async function translateText(text, apiKey, sourceLang = "auto") {
 
   try {
     // Gemini APIで翻訳を実行
-    const translationResult = await translateWithGeminiAPI(text, apiKey, sourceLang);
-
-    // 翻訳結果が成功した場合はキャッシュに保存
+    const translationResult = await translateWithGeminiAPI(
+      text, 
+      settings.apiKey, 
+      translationOptions.sourceLanguage
+    );
+    
+    // モデル情報を追加
     if (translationResult && translationResult.success) {
-      cacheTranslation(text, sourceLang, translationResult);
+      translationResult.model = translationOptions.model;
+      
+      // キャッシュに保存
+      cacheTranslation(text, translationOptions.sourceLanguage, translationResult);
     }
 
     return translationResult;

@@ -72,6 +72,9 @@ export function startObserving(
       );
     }
 
+    // グレースピリオド状態を取得
+    const inGracePeriod = isInGracePeriod();
+    
     // 監視を開始
     const observer = createMutationObserver(async (addedNodes) => {
       // 監視中フラグが立っていない場合は処理しない
@@ -218,6 +221,7 @@ export async function processExistingMessages(
  * @param {MutationObserver} observer 現在のオブザーバー
  * @param {Map} translatedComments 翻訳済みコメントを追跡するMap
  * @param {number} gracePeriodDuration グレースピリオドの期間（ミリ秒）
+ * @param {function} startObservingFunc 監視を再開する関数
  * @returns {Promise<void>}
  */
 export async function handleChannelChange(
@@ -225,7 +229,8 @@ export async function handleChannelChange(
   currentUrl, 
   observer, 
   translatedComments,
-  gracePeriodDuration
+  gracePeriodDuration,
+  startObservingFunc
 ) {
   logger.info(`チャンネル変更を検出: ${previousUrl} -> ${currentUrl}`);
   
@@ -240,11 +245,18 @@ export async function handleChannelChange(
   setGracePeriodState(true);
   logger.debug(`${gracePeriodDuration}msのグレースピリオドを開始します。`);
   
-  // グレースピリオド後にフラグをリセット
+  // グレースピリオド後にフラグをリセットし監視を再開
   return new Promise((resolve) => {
     setTimeout(() => {
       setGracePeriodState(false);
       logger.debug("グレースピリオドが終了しました。");
+      
+      // グレースピリオド終了後に監視を再開
+      if (typeof startObservingFunc === 'function') {
+        startObservingFunc();
+        logger.debug("グレースピリオド終了後に監視を再開しました。");
+      }
+      
       resolve();
     }, gracePeriodDuration);
   });

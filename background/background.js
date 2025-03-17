@@ -147,6 +147,64 @@ function handleTabUpdated(tabId, changeInfo, tab) {
 /**
  * メッセージハンドラーのマッピング
  */
+/**
+ * APIキーのテスト
+ * @param {string} apiKey テストするAPIキー
+ * @returns {Promise<object>} テスト結果
+ */
+async function testApiKey(apiKey) {
+  try {
+    // 設定からモデル情報を取得
+    const settings = getSettings();
+    const model = settings.geminiModel || 'gemini-2.0-flash-lite';
+    
+    // 簡単なテストを実行
+    // まず自動翻訳テスト用テキストを作成
+    const testText = "Hello, this is a test message for the Twitch Gemini Translator extension.";
+    
+    // 翻訳オプションを設定
+    const translationOptions = {
+      model: model,
+      sourceLanguage: 'auto'
+    };
+    
+    // 実際に翻訳をテスト
+    logger.info(`APIキーのテストを開始します (モデル: ${model})`, 'background');
+    
+    // 設定を一時的に上書き
+    const originalApiKey = settings.apiKey;
+    settings.apiKey = apiKey;
+    
+    // 翻訳を実行
+    const result = await translateText(testText, translationOptions);
+    
+    // 設定を元に戻す
+    settings.apiKey = originalApiKey;
+    
+    if (result.success) {
+      logger.info('APIキーのテストに成功しました', 'background', { 
+        model: model,
+        translation: result.translation
+      });
+      return { valid: true, translation: result.translation };
+    } else {
+      logger.error('APIキーのテストに失敗しました', 'background', { 
+        error: result.error,
+        model: model
+      });
+      return { valid: false, error: result.error };
+    }
+  } catch (error) {
+    const errorInfo = errorHandler.handleError(error, {
+      source: 'background',
+      code: 'api_test_error',
+      details: 'APIキーのテスト中にエラーが発生しました'
+    });
+    
+    return { valid: false, error: errorInfo.message };
+  }
+}
+
 const messageHandlers = {
   // 翻訳リクエスト
   'translate': async (request, sender, sendResponse) => {
@@ -198,12 +256,15 @@ const messageHandlers = {
         return { success: false, error: 'APIキーが設定されていません' };
       }
       
+      // 翻訳オプションを設定
+      const translationOptions = {
+        model: settings.geminiModel,
+        sourceLanguage: request.sourceLanguage || 'auto',
+        targetLanguage: 'ja'
+      };
+      
       // 翻訳を実行
-      const result = await translateText(
-        request.message, 
-        settings.apiKey,
-        'auto'
-      );
+      const result = await translateText(request.message, translationOptions);
       
       if (!result.success) {
         throw new Error(result.error || '翻訳に失敗しました');
@@ -211,10 +272,16 @@ const messageHandlers = {
       
       logger.debug('メッセージ翻訳が完了しました', 'background', { 
         original: utils.truncateString(request.message, 30),
-        translation: utils.truncateString(result.translation, 30)
+        translation: utils.truncateString(result.translation, 30),
+        model: settings.geminiModel
       });
       
-      return { success: true, translation: result.translation };
+      return { 
+        success: true, 
+        translation: result.translation,
+        sourceLanguage: result.detectedLanguage || 'unknown',
+        model: settings.geminiModel
+      };
     } catch (error) {
       // エラーを処理
       const errorInfo = errorHandler.handleError(error, {
@@ -403,6 +470,52 @@ const messageHandlers = {
       });
       
       return { success: false, error: errorInfo.message };
+    }
+  },
+  
+  // APIキーのテスト
+  'testApiKey': async (request, sender, sendResponse) => {
+    try {
+      // APIキーが空の場合はエラー
+      if (!request.apiKey) {
+        return { valid: false, error: 'APIキーが指定されていません' };
+      }
+      
+      // APIキーのテストを実行
+      const result = await testApiKey(request.apiKey);
+      return result;
+    } catch (error) {
+      const errorInfo = errorHandler.handleError(error, {
+        source: 'background',
+        code: 'api_test_error',
+        details: 'APIキーのテスト中にエラーが発生しました'
+      });
+      
+      return { valid: false, error: errorInfo.message };
+    }
+  },
+  
+  // 現在のAPIキーのチェック
+  'checkApiKey': async (request, sender, sendResponse) => {
+    try {
+      const settings = getSettings();
+      
+      // APIキーが空の場合はエラー
+      if (!settings.apiKey) {
+        return { valid: false, error: 'APIキーが設定されていません' };
+      }
+      
+      // APIキーのテストを実行
+      const result = await testApiKey(settings.apiKey);
+      return result;
+    } catch (error) {
+      const errorInfo = errorHandler.handleError(error, {
+        source: 'background',
+        code: 'api_test_error',
+        details: '現在のAPIキーのチェック中にエラーが発生しました'
+      });
+      
+      return { valid: false, error: errorInfo.message };
     }
   }
 };

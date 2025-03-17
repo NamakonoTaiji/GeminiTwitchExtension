@@ -54,7 +54,10 @@ export function markExistingMessages(clearNewFlag = true) {
  * @param {boolean} isInGracePeriod グレースピリオド中かどうか
  * @returns {MutationObserver} 設定済みのMutationObserver
  */
-export function createMutationObserver(nodeProcessor, requestDelay, isInGracePeriod) {
+export function createMutationObserver(nodeProcessor, requestDelay = 100, isInGracePeriod = false) {
+  // 引数からグレースピリオド状態を取得
+  // isInGracePeriodは引数から渡されるため、その値を使用
+  const gracePeriodActive = isInGracePeriod || false;
   return new MutationObserver((mutations) => {
     // 新規メッセージの処理間隔を開けるためのスロットリング
     const addedNodes = [];
@@ -73,12 +76,22 @@ export function createMutationObserver(nodeProcessor, requestDelay, isInGracePer
     // 収集したノードを遅延を付けて処理
     addedNodes.forEach((node, index) => {
       setTimeout(() => {
-        // グレースピリオド中に追加されたノードは「既存メッセージ」として分類する
-        // グレースピリオドが終了している場合のみ「新規メッセージ」としてマーク
-        if (!isInGracePeriod) {
-          node._isNewMessage = true;
-        } else {
+        // グレースピリオド状態を参照
+        const currentGracePeriod = gracePeriodActive;
+        
+        if (currentGracePeriod) {
+          // グレースピリオド中はすべて既存メッセージとしてマーク
           node._isExistingMessage = true;
+          // 新規メッセージフラグを明示的に削除
+          delete node._isNewMessage;
+          
+          // デバッグ用にグレースピリオド中の既存メッセージと記録
+          node._addedDuringGracePeriod = true;
+        } else {
+          // グレースピリオド中でない場合は新規メッセージ
+          node._isNewMessage = true;
+          // 既存メッセージフラグを明示的に削除
+          delete node._isExistingMessage;
         }
         
         // ノード処理関数を呼び出し
