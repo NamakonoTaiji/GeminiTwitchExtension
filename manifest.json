@@ -12,12 +12,14 @@
     "default_popup": "popup/popup.html"
   },
   "background": {
-    "service_worker": "background/background.js"
+    "service_worker": "background/background.js",
+    "type": "module"
   },
   "content_scripts": [
     {
       "matches": ["*://*.twitch.tv/*"],
-      "js": ["content/content.js"]
+      "js": ["content/content.js"],
+      "type": "module"
     }
   ],
   "permissions": [
@@ -29,5 +31,11 @@
   },
   "host_permissions": [
     "https://generativelanguage.googleapis.com/*"
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["utils/*.js"],
+      "matches": ["*://*.twitch.tv/*"]
+    }
   ]
 }
