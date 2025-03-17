@@ -500,6 +500,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       if (!cachedResult.engine) {
         cachedResult.engine = "cached";
       }
+      
+      // デバッグ情報を追加
+      console.log(`キャッシュヒット: "${message.text.substring(0, 20)}..."`);
+      
       sendResponse(cachedResult);
       return true;
     }
@@ -605,11 +609,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   // キャッシュのクリア
   else if (message.action === "clearCache") {
+    const previousSize = translationCache.size;
     translationCache.clear();
     chrome.storage.local.remove("translationCache");
+    console.log(`キャッシュをクリアしました (前: ${previousSize} エントリ)`);
     sendResponse({
       success: true,
-      message: "キャッシュをクリアしました",
+      message: `キャッシュをクリアしました (${previousSize} エントリ)`,
     });
     return true;
   }
@@ -617,14 +623,50 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   // Content Scriptからの初期化通知
   else if (message.action === "contentScriptInitialized") {
     console.log("Content Scriptが初期化されました。有効状態:", message.enabled);
-    // 必要に応じてsettingsの再同期を行うことも可能
-    sendResponse({ success: true });
+    // settingsを再同期 - タブ間の状態一貫性を強化
+    initialize().then(() => {
+      console.log('初期化通知を受けて設定を再ロードしました');
+      sendResponse({ 
+        success: true, 
+        settings: {
+          enabled: settings.enabled,
+          processExistingMessages: settings.processExistingMessages
+        }
+      });
+    }).catch(error => {
+      console.error('初期化通知処理中のエラー:', error);
+      sendResponse({ success: false, error: error.message });
+    });
     return true;
   }
 
   // Pingリクエスト - 拡張機能コンテキストの有効性確認用
   else if (message.action === "ping") {
-    sendResponse({ success: true, message: "pong" });
+    // キャッシュの現状や設定情報も一緒に送信 (デバッグ用)
+    sendResponse({ 
+      success: true, 
+      message: "pong",
+      debug: {
+        cacheSize: translationCache.size,
+        enabled: settings.enabled,
+        processExistingMessages: settings.processExistingMessages,
+        timestamp: Date.now()
+      }
+    });
+    return true;
+  }
+  
+  // チャンネル変更通知
+  else if (message.action === "channelChanged") {
+    console.log(`チャンネル変更通知を受信: ${message.from} -> ${message.to}`);
+    // チャンネルごとの翻訳履歴管理を将来実装する場合はここで処理
+    sendResponse({ 
+      success: true,
+      settings: {
+        enabled: settings.enabled,
+        processExistingMessages: settings.processExistingMessages
+      }
+    });
     return true;
   }
 });

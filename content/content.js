@@ -30,8 +30,132 @@ if (document.readyState === 'complete' || document.readyState === 'interactive')
   setTimeout(initialize, 1000);
 }
 
+// URLの変更を監視（Twitchのチャンネル切り替え検出用）
+let lastUrl = location.href;
+let urlCheckInterval = null;
+
+// URL変更チェック用の関数
+function startUrlChangeDetection() {
+if (urlCheckInterval) {
+clearInterval(urlCheckInterval);
+}
+
+urlCheckInterval = setInterval(() => {
+const currentUrl = location.href;
+
+// URLが変更された場合（チャンネル切り替え時）
+if (currentUrl !== lastUrl) {
+console.log(`URL変更を検出: ${lastUrl} -> ${currentUrl}`);
+// 変更前のURLを保存
+const previousUrl = lastUrl;
+// 現在のURLを更新
+lastUrl = currentUrl;
+
+// 監視を一度停止
+if (observer) {
+  stopObserving();
+  translatedComments.clear(); // 翻訳済みコメントをクリア
+  console.log('チャンネル変更のため監視を一時停止、翻訳キャッシュをクリア');
+        }
+        
+        // URLからチャンネル名を抽出
+        const oldChannelMatch = previousUrl.match(/twitch\.tv\/(\w+)/);
+        const newChannelMatch = currentUrl.match(/twitch\.tv\/(\w+)/);
+        const oldChannel = oldChannelMatch ? oldChannelMatch[1] : '不明';
+        const newChannel = newChannelMatch ? newChannelMatch[1] : '不明';
+        
+        console.log(`チャンネル変更: ${oldChannel} -> ${newChannel}`);
+        
+        // チャンネル切り替え時には必ず既存メッセージ処理を無効化するためのフラグを設定
+        sessionStorage.setItem('twitch_gemini_channel_changed', 'true');
+        
+        // バックグラウンドスクリプトにチャンネル変更を通知
+      try {
+        chrome.runtime.sendMessage({
+          action: 'channelChanged',
+          from: lastUrl,
+          to: currentUrl
+        }, response => {
+          if (chrome.runtime.lastError) {
+            console.error('チャンネル変更通知エラー:', chrome.runtime.lastError);
+          } else {
+            console.log('チャンネル変更通知完了:', response);
+            
+            // バックグラウンドから返された設定を適用することも可能
+            if (response && response.settings) {
+              console.log('バックグラウンドから設定を受信:', response.settings);
+            }
+          }
+        });
+      } catch (error) {
+        console.error('チャンネル変更通知中のエラー:', error);
+      }
+      
+      // 少し待ってから再初期化（DOMの更新を待つ）
+      setTimeout(() => {
+        console.log('チャンネル変更後の再初期化を開始');
+        reinitialize();
+      }, 1500);
+    }
+  }, 2000); // 2秒ごとにチェック
+}
+
+// 再初期化関数
+async function reinitialize() {
+  console.log('拡張機能の再初期化を開始...');
+  
+  // 現在のチャンネル情報をログ出力
+  const channelMatch = location.href.match(/twitch\.tv\/(\w+)/);
+  const currentChannel = channelMatch ? channelMatch[1] : '不明';
+  console.log(`現在のチャンネル: ${currentChannel}`);
+  
+  // 設定を再読み込み
+  await updateSettings();
+  
+  // 現在の翻訳状態をログ出力
+  console.log(`翻訳状態確認 - 有効: ${isEnabled}, APIキー: ${apiKeySet ? '設定済み' : '未設定'}`);
+  console.log(`既存メッセージ処理設定: ${settings.processExistingMessages ? '有効' : '無効'}`);
+  
+  // 翻訳済みキャッシュをクリア
+  const previousSize = translatedComments.size;
+  translatedComments.clear();
+  console.log(`チャンネル変更に伴い翻訳済みキャッシュをクリア (${previousSize} エントリ)`);
+  
+  // チャンネル遷移時には、既存メッセージ処理を一時的に無効化
+  const originalSetting = settings.processExistingMessages;
+  
+  // 変更前の設定をログ出力
+  console.log(`チャンネル切り替え時の既存メッセージ処理を強制無効化 (元設定: ${originalSetting})`);
+  
+  // 設定を一時的に置き換え
+  const tempSettings = { ...settings };
+  tempSettings.processExistingMessages = false;
+  settings = tempSettings;
+  
+  // 有効かつAPIキーがある場合のみ監視を再開
+  if (isEnabled && apiKeySet) {
+    console.log('チャンネル変更後の監視を再開 (既存メッセージ処理は無効)');
+    startObserving();
+    
+    // 元の設定を復元 (監視開始後に行うが、既存メッセージ処理は既に無効化済み)
+    setTimeout(() => {
+      tempSettings.processExistingMessages = originalSetting;
+      settings = tempSettings;
+      console.log(`設定を元に戻しました: 既存メッセージ処理=${settings.processExistingMessages ? '有効' : '無効'}`);
+    }, 1000);
+  } else {
+    console.log('設定により監視は再開されません（無効か、APIキー未設定）');
+    
+    // 監視を再開しない場合も元の設定を復元
+    tempSettings.processExistingMessages = originalSetting;
+    settings = tempSettings;
+  }
+}
+
 // 初期化処理
 async function initialize() {
+  // URL変更検出を開始
+  startUrlChangeDetection();
   console.log('Twitch Gemini Translator: 初期化開始');
   
   // 再度の初期化フラグをクリア
@@ -60,6 +184,13 @@ async function initialize() {
   
   // 設定を読み込む
   try {
+    // 将来、ページのURLからチャンネル情報を取得してログに記録
+    const currentUrl = location.href;
+    const channelMatch = currentUrl.match(/twitch\.tv\/(\w+)/);
+    const currentChannel = channelMatch ? channelMatch[1] : 'チャンネル不明';
+    console.log(`現在のTwitchページ: ${currentUrl}`);
+    console.log(`チャンネル名: ${currentChannel}`);
+
     // バックグラウンドスクリプトから設定を取得
     settings = await getSettings();
     
@@ -68,6 +199,7 @@ async function initialize() {
     
     console.log(`設定を読み込みました: 有効=${isEnabled}, APIキー設定済み=${apiKeySet}`);
     console.log('翻訳モード:', settings.translationMode);
+    console.log('既存メッセージ処理:', settings.processExistingMessages ? '有効' : '無効');
     
     // 設定をローカルストレージに保存（コンテキスト無効化への対策）
     try {
@@ -150,34 +282,63 @@ async function initialize() {
 
 // バックグラウンドスクリプトから設定を取得
 async function getSettings() {
-  return new Promise((resolve) => {
+  return new Promise(async (resolve) => {
     try {
-      chrome.runtime.sendMessage({ action: 'getSettings' }, (response) => {
-        if (chrome.runtime.lastError) {
-          const error = chrome.runtime.lastError;
-          console.warn('設定取得中のエラー:', error);
-          // エラー時はフォールバック処理へ
-          throw new Error(error.message || 'Unknown error');
-        } else {
-          // 成功した場合はローカルストレージに保存
-          try {
-            localStorage.setItem('twitch_gemini_settings', JSON.stringify(response));
-            console.log('バックグラウンドから設定を取得しました');
-          } catch (storageError) {
-            console.warn('ローカルストレージへの保存に失敗:', storageError);
-          }
-          resolve(response);
-        }
-      });
-    } catch (error) {
-      console.error('設定取得リクエストの送信中にエラーが発生しました:', error);
+      // まずローカルストレージから設定を読み込むことを試みる
+      const storedSettings = localStorage.getItem('twitch_gemini_settings');
+      let localSettings = null;
       
-      // ローカルストレージからの設定読み込みを試みる
-      getSettingsFromLocalStorage().then(resolve).catch(() => {
-        // デフォルト設定を返す
-        console.log('デフォルト設定を使用します');
-        resolve(getDefaultSettings());
-      });
+      if (storedSettings) {
+        try {
+          localSettings = JSON.parse(storedSettings);
+          console.log('ローカルストレージから設定を読み込みました');
+        } catch (parseError) {
+          console.error('ローカルストレージの設定の解析中にエラー:', parseError);
+        }
+      }
+      
+      try {
+        // 次にバックグラウンドスクリプトから設定を取得することを試みる
+        chrome.runtime.sendMessage({ action: 'getSettings' }, (response) => {
+          if (chrome.runtime.lastError) {
+            const error = chrome.runtime.lastError;
+            console.warn('設定取得中のエラー:', error);
+            
+            // エラー時はローカル設定を使用
+            if (localSettings) {
+              console.log('バックグラウンドからの設定取得に失敗しました。ローカル設定を使用します');
+              resolve(localSettings);
+            } else {
+              console.log('ローカル設定がないため、デフォルト設定を使用します');
+              resolve(getDefaultSettings());
+            }
+          } else {
+            // 成功した場合はローカルストレージに保存
+            try {
+              localStorage.setItem('twitch_gemini_settings', JSON.stringify(response));
+              console.log('バックグラウンドから設定を取得し、ローカルに保存しました');
+            } catch (storageError) {
+              console.warn('ローカルストレージへの保存に失敗:', storageError);
+            }
+            resolve(response);
+          }
+        });
+      } catch (messageError) {
+        console.error('設定取得リクエストの送信中にエラーが発生しました:', messageError);
+        
+        // メッセージ送信自体が失敗した場合はローカル設定を使用
+        if (localSettings) {
+          console.log('バックグラウンドへのメッセージ送信に失敗しました。ローカル設定を使用します');
+          resolve(localSettings);
+        } else {
+          console.log('ローカル設定がないため、デフォルト設定を使用します');
+          resolve(getDefaultSettings());
+        }
+      }
+    } catch (error) {
+      // 最終フォールバック
+      console.error('設定読み込み中の致命的エラー:', error);
+      resolve(getDefaultSettings());
     }
   });
 }
@@ -255,6 +416,12 @@ function startObserving() {
 // チャットメッセージの監視処理
 function observeChatMessages(container) {
   console.log("チャットコンテナの監視を開始します");
+  
+  // 既存の監視があれば停止
+  if (observer) {
+    console.log("既存の監視を停止して再設定します");
+    observer.disconnect();
+  }
 
   // MutationObserverの設定
   observer = new MutationObserver((mutations) => {
@@ -285,8 +452,27 @@ function observeChatMessages(container) {
   observer.observe(container, { childList: true });
   console.log("監視を開始しました（childList: true）");
 
+  // 現在のURLを保存（チャンネル変更検出用）
+  lastUrl = location.href;
+  console.log(`現在のURL: ${lastUrl}`);
+  
+  // この関数が呼ばれた時点でのsettings.processExistingMessagesの値をキャプチャ
+  let shouldProcessExisting = settings.processExistingMessages;
+  
+  // チャンネル遷移直後の場合は、強制的に既存メッセージ処理を無効化
+  const channelChangedFlag = sessionStorage.getItem('twitch_gemini_channel_changed');
+  if (channelChangedFlag === 'true') {
+    console.log('チャンネル変更直後のため、既存メッセージ処理を強制無効化します');
+    shouldProcessExisting = false;
+    
+    // フラグをクリア
+    sessionStorage.removeItem('twitch_gemini_channel_changed');
+  }
+  
+  console.log(`既存メッセージ処理設定: ${shouldProcessExisting ? '有効' : '無効'} (元の設定: ${settings.processExistingMessages ? '有効' : '無効'})`);
+  
   // 監視開始時の既存メッセージ処理
-  if (settings.processExistingMessages) {
+  if (shouldProcessExisting) {
     console.log("既存のチャットメッセージを処理します...");
     const existingMessages = Array.from(container.children);
     console.log(`${existingMessages.length}個の既存メッセージを処理します`);
@@ -563,10 +749,26 @@ function sendTranslationRequest(text, sourceLang = 'auto') {
 function handleContextInvalidated() {
   console.warn('拡張機能コンテキストが無効になりました。自動再接続を試みます。');
   
+  // 現在のURLを保存
+  const currentUrl = location.href;
+  
   // 監視を停止
   if (observer) {
     observer.disconnect();
     observer = null;
+    console.log('監視を停止しました');
+  }
+  
+  // ローカルストレージの設定を確認
+  let localSettings = null;
+  try {
+    const stored = localStorage.getItem('twitch_gemini_settings');
+    if (stored) {
+      localSettings = JSON.parse(stored);
+      console.log('ローカルストレージから設定を読み込みました');
+    }
+  } catch (e) {
+    console.error('ローカル設定の読み込みエラー:', e);
   }
   
   // コンテキスト無効化が既に検出されている場合は再初期化しない
@@ -574,17 +776,48 @@ function handleContextInvalidated() {
   const now = Date.now();
   const lastAttempt = parseInt(contextInvalidatedFlag || '0');
   
+  // 再試行回数を増やす
+  const retryCount = parseInt(sessionStorage.getItem('twitch_gemini_retry_count') || '0') + 1;
+  sessionStorage.setItem('twitch_gemini_retry_count', retryCount.toString());
+  
   // 最後の試行から30秒以上経過している場合のみ再試行
   if (now - lastAttempt > 30000) {
     sessionStorage.setItem('twitch_gemini_context_invalidated', now.toString());
     
-    // 10秒後に再初期化を試行
+    // URLチェックも再開
+    startUrlChangeDetection();
+    
+    // 再試行回数に応じて遅延を調整
+    const delayTime = Math.min(retryCount * 1000, 10000); // 最大1万ミリ秒まで
+    
+    // 遅延を設定して再初期化を試行
+    console.log(`${delayTime/1000}秒後に再初期化を試行します... (試行回数: ${retryCount})`);
+    
     setTimeout(() => {
-      console.log('拡張機能の再初期化を試みます...');
-      initialize();
-    }, 10000);
+      // ローカル設定があれば先に適用
+      if (localSettings) {
+        settings = localSettings;
+        isEnabled = settings.enabled;
+        apiKeySet = !!settings.apiKey;
+        console.log('ローカル設定を適用しました');
+        
+        // 設定に基づいて監視を再開するか判断
+        if (isEnabled && apiKeySet) {
+          console.log('設定に基づいて監視を再開します');
+          startObserving();
+        }
+      }
+      
+      // 今のページがまだTwitchか確認
+      if (location.href.includes('twitch.tv') && location.href === currentUrl) {
+        console.log('再初期化を実行します');
+        initialize(); // 通常の初期化も実行
+      } else {
+        console.log('ページが変わったため再初期化をキャンセルしました');
+      }
+    }, delayTime);
   } else {
-    console.log('最近再初期化を試行したため、再試行をスキップします');
+    console.log(`最近再初期化を試行したため、再試行をスキップします (前回: ${new Date(lastAttempt).toLocaleTimeString()})`);
   }
 }
 
@@ -677,6 +910,9 @@ function stopObserving() {
     observer = null;
     console.log('Twitchチャットの監視を停止しました');
   }
+  
+  // URL変更検出は継続 (これは停止しない)
+  console.log('URL変更検出は継続中です');
 }
 
 // 設定を更新
@@ -684,11 +920,17 @@ async function updateSettings() {
   try {
     console.log('設定の再取得を開始...');
     const oldEnabled = isEnabled; // 更新前の状態を保存
+    const oldProcessExisting = settings ? settings.processExistingMessages : false; // 更新前の既存メッセージ処理設定
     
     // 設定を再取得
     settings = await getSettings();
     isEnabled = settings.enabled;
     apiKeySet = !!settings.apiKey;
+    
+    // 既存メッセージ処理設定の変更をログ出力
+    if (settings.processExistingMessages !== oldProcessExisting) {
+      console.log(`既存メッセージ処理設定の変更: ${oldProcessExisting} -> ${settings.processExistingMessages}`);
+    }
     
     console.log('設定を更新しました');
     console.log(`有効状態: ${oldEnabled} -> ${isEnabled}`);
@@ -783,10 +1025,31 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     try {
       // ダミーメッセージを送信してコンテキストが有効か確認
       chrome.runtime.sendMessage({ action: 'ping' }, response => {
-        // 当関数が終了する前にエラーが発生しなければコンテキストは有効
-        // 次回の確認をスケジュール
-        const nextCheckTime = isEnabled ? 15000 : 60000; // 有効時は15秒ごと、無効時は1分ごと
-        setTimeout(checkExtensionContext, nextCheckTime);
+        if (chrome.runtime.lastError) {
+          // エラーが発生した場合、ログに記録して再試行
+          console.warn('コンテキスト確認中のエラー:', chrome.runtime.lastError);
+          handleContextInvalidated(); // コンテキスト無効化処理を呼び出す
+        } else {
+          // 当関数が終了する前にエラーが発生しなければコンテキストは有効
+          // 次回の確認をスケジュール
+          const nextCheckTime = isEnabled ? 15000 : 60000; // 有効時は15秒ごと、無効時は1分ごと
+          
+          // デバッグ情報があれば、設定の一貫性をさらにチェック
+          if (response && response.debug) {
+            const backendSettings = response.debug;
+            if (backendSettings.enabled !== isEnabled) {
+              console.warn('フロントエンドとバックグラウンドの設定が異なります:', {
+                frontend: isEnabled,
+                backend: backendSettings.enabled
+              });
+              
+              // 設定の不一致があれば再同期を試行
+              updateSettings();
+            }
+          }
+          
+          setTimeout(checkExtensionContext, nextCheckTime);
+        }
       });
     } catch (error) {
       // エラーが発生した場合、拡張機能の再初期化を試みる
