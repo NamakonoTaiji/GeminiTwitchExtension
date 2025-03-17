@@ -7,6 +7,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   const resetButton = document.getElementById('resetButton');
   const statusMessage = document.getElementById('status-message');
   const translationEnabledCheckbox = document.getElementById('translationEnabled');
+  const autoToggleCheckbox = document.getElementById('autoToggle');
   const geminiModelSelect = document.getElementById('geminiModel');
   const translationModeSelect = document.getElementById('translationMode');
   const japaneseThresholdInput = document.getElementById('japaneseThreshold');
@@ -35,6 +36,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   const defaultSettings = {
     apiKey: '',
     enabled: false,
+    autoToggle: true, // URLに基づいて自動的にON/OFFする機能
     translationMode: 'selective',
     japaneseThreshold: 30,
     englishThreshold: 50,
@@ -65,6 +67,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     apiKeyInput.setAttribute('data-masked', 'false');
   }
   translationEnabledCheckbox.checked = settings.enabled;
+  autoToggleCheckbox.checked = settings.autoToggle !== undefined ? settings.autoToggle : true;
   translationModeSelect.value = settings.translationMode;
   japaneseThresholdInput.value = settings.japaneseThreshold;
   japaneseThresholdValue.textContent = `${settings.japaneseThreshold}%`;
@@ -155,6 +158,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     const newSettings = {
       apiKey: apiKeyToSave,
       enabled: translationEnabledCheckbox.checked,
+      autoToggle: autoToggleCheckbox.checked,
       translationMode: translationModeSelect.value,
       japaneseThreshold: parseInt(japaneseThresholdInput.value),
       englishThreshold: parseInt(englishThresholdInput.value),

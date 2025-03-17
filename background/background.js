@@ -5,14 +5,16 @@
  * メッセージハンドリング、初期化、イベント処理を行います。
  */
 
-import { loadSettings, getSettings } from './modules/settings.js';
-import { initializeCache } from './modules/cache.js';
+import { loadSettings, getSettings, saveSettings, updateSetting } from './modules/settings.js';
+import { initializeCache, clearCache } from './modules/cache.js';
 import { initializeRequestQueue } from './modules/requestQueue.js';
 import { translateText } from './modules/translator.js';
-import { loadStats, saveStats } from './modules/stats.js';
+import { loadStats, saveStats, getStats } from './modules/stats.js';
 import logger from './modules/logger.js';
 import errorHandler from './modules/errorHandler.js';
 import utils from './modules/utils.js';
+// Service Workerではdynamic importが使えないため、ローカルのurlUtilsを静的インポートする
+import * as urlUtils from './modules/urlUtils.js';
 
 // アプリケーションの状態
 const appState = {
@@ -134,19 +136,117 @@ function handleTabActivated(activeInfo) {
  * @param {object} changeInfo 変更情報
  * @param {object} tab タブ情報
  */
-function handleTabUpdated(tabId, changeInfo, tab) {
+async function handleTabUpdated(tabId, changeInfo, tab) {
   // URLが変更され、Twitchページの場合
   if (changeInfo.url && changeInfo.url.includes('twitch.tv')) {
     logger.debug('Twitchタブが更新されました', 'background', { 
       tabId,
       url: changeInfo.url
     });
+    
+    // 自動オン/オフ機能が有効かつAPIキーが設定されている場合
+    const settings = getSettings();
+    
+    if (settings.autoToggle && settings.apiKey) {
+      try {
+        // 配信視聴ページかチェック
+        const isStream = urlUtils.isStreamPage(changeInfo.url);
+        
+        // 現在の有効/無効状態を取得
+        const currentEnabled = settings.enabled;
+        
+        // ログ出力を強化
+        logger.info(`URL判定: ${changeInfo.url} => ${isStream ? '配信ページ' : '非配信ページ'} (現在: ${currentEnabled ? '有効' : '無効'})`, 'background');
+        
+        // 配信ページと拡張機能の状態が一致しない場合は更新
+        if (isStream !== currentEnabled) {
+          logger.info(`URL判定に基づいて拡張機能を${isStream ? '有効' : '無効'}にします`, 'background', {
+            url: changeInfo.url,
+            isStreamPage: isStream
+          });
+          
+          // 設定を更新
+          await updateSetting('enabled', isStream);
+          
+          // アプリケーションの状態を更新
+          appState.translationEnabled = isStream;
+          
+          // タブに通知
+          try {
+            await chrome.tabs.sendMessage(tabId, {
+              action: 'settingsUpdated',
+              settings: {
+                ...settings,
+                enabled: isStream
+              }
+            });
+            logger.debug('設定更新をタブに通知しました', 'background');
+          } catch (error) {
+            // タブがまだ準備できていない可能性があるため、後で再試行
+            logger.debug('設定更新の通知に失敗しました。後で再試行します。', 'background');
+            
+            // 1秒後に再試行
+            setTimeout(async () => {
+              try {
+                await chrome.tabs.sendMessage(tabId, {
+                  action: 'settingsUpdated',
+                  settings: {
+                    ...settings,
+                    enabled: isStream
+                  }
+                });
+                logger.debug('設定更新の再試行が成功しました', 'background');
+              } catch (retryError) {
+                logger.debug('設定更新の再試行にも失敗しました', 'background');
+              }
+            }, 1000);
+          }
+        }
+      } catch (error) {
+        logger.error('URL判定と設定更新中にエラーが発生しました', 'background', { error });
+      }
+    }
+  }
+  
+  // ページのロード完了時にも状態を確認
+  if (changeInfo.status === 'complete' && tab.url && tab.url.includes('twitch.tv')) {
+    // 後からロードされた場合にも状態を確認する
+    const settings = getSettings();
+    
+    if (settings.autoToggle && settings.apiKey) {
+      try {
+        // 配信視聴ページかチェック
+        const isStream = urlUtils.isStreamPage(tab.url);
+        const currentEnabled = settings.enabled;
+        
+        if (isStream !== currentEnabled) {
+          logger.info(`ページロード完了時に拡張機能を${isStream ? '有効' : '無効'}にします`, 'background', {
+            url: tab.url,
+            isStreamPage: isStream
+          });
+          
+          await updateSetting('enabled', isStream);
+          appState.translationEnabled = isStream;
+          
+          try {
+            await chrome.tabs.sendMessage(tabId, {
+              action: 'settingsUpdated',
+              settings: {
+                ...settings,
+                enabled: isStream
+              }
+            });
+          } catch (error) {
+            logger.debug('ページロード完了時の設定更新通知に失敗しました', 'background');
+          }
+        }
+      } catch (error) {
+        logger.error('ページロード完了処理でエラーが発生しました', 'background', { error });
+      }
+    }
   }
 }
 
-/**
- * メッセージハンドラーのマッピング
- */
 /**
  * APIキーのテスト
  * @param {string} apiKey テストするAPIキー
@@ -205,6 +305,9 @@ async function testApiKey(apiKey) {
   }
 }
 
+/**
+ * メッセージハンドラーのマッピング
+ */
 const messageHandlers = {
   // 翻訳リクエスト
   'translate': async (request, sender, sendResponse) => {
@@ -232,6 +335,31 @@ const messageHandlers = {
         details: `テキスト「${utils.truncateString(request.text, 50)}」の翻訳中にエラーが発生しました`
       });
       
+      return { success: false, error: errorInfo.message };
+    }
+  },
+  
+  // 現在のURL判定
+  'checkCurrentUrl': async (request, sender, sendResponse) => {
+    try {
+      if (!request.url) {
+        return { success: false, error: 'URLが指定されていません' };
+      }
+      
+      // URLが配信ページかどうかを判定
+      const isStreamPage = urlUtils.isStreamPage(request.url);
+      
+      logger.debug(`URL判定リクエスト: ${request.url} => ${isStreamPage ? '配信ページ' : '非配信ページ'}`, 'background');
+      
+      return { success: true, isStreamPage };
+    } catch (error) {
+      const errorInfo = errorHandler.handleError(error, {
+        source: 'background',
+        code: 'url_check_error',
+        details: 'URL判定中にエラーが発生しました'
+      });
+      
+      logger.error('URL判定エラー:', 'background', { error: errorInfo.message });
       return { success: false, error: errorInfo.message };
     }
   },

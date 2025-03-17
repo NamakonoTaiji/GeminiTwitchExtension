@@ -9,6 +9,7 @@ const DEFAULT_SETTINGS = {
   // 基本設定
   enabled: false,                   // 翻訳機能の有効/無効
   apiKey: "",                       // Gemini APIキー
+  autoToggle: true,                 // URLに基づいて自動的にON/OFF
   
   // 翻訳設定
   translationMode: "selective",      // 翻訳モード: selective（選択的）, all（すべて）, english（英語のみ）
