@@ -37,7 +37,9 @@
         "utils/*.js",
         "content/modules/*.js",
         "background/modules/*.js",
-        "content/*.js"
+        "content/*.js",
+        "shared/*.js",
+        "shared/ui/*.js"
       ],
       "matches": ["*://*.twitch.tv/*"]
     }
