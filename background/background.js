@@ -308,6 +308,78 @@ async function testApiKey(apiKey) {
 /**
  * メッセージハンドラーのマッピング
  */
+/**
+ * URL変更処理を行う
+ * @param {string} url URL
+ * @param {number|null} tabId タブID
+ */
+async function handleUrlChange(url, tabId) {
+  try {
+    if (!url) {
+      logger.warn('URL変更処理: URLが指定されていません', 'background');
+      return;
+    }
+    
+    // 自動オン/オフ機能が有効かつAPIキーが設定されている場合
+    const settings = getSettings();
+    
+    if (settings.autoToggle && settings.apiKey) {
+      // 配信視聴ページかチェック
+      const isStream = urlUtils.isStreamPage(url);
+      
+      // 現在の有効/無効状態を取得
+      const currentEnabled = settings.enabled;
+      
+      // ログ出力を強化
+      logger.info(`URL判定: ${url} => ${isStream ? '配信ページ' : '非配信ページ'} (現在: ${currentEnabled ? '有効' : '無効'})`, 'background');
+      
+      // 配信ページと拡張機能の状態が一致しない場合は更新
+      if (isStream !== currentEnabled) {
+        logger.info(`URL判定に基づいて拡張機能を${isStream ? '有効' : '無効'}にします`, 'background', {
+          url: url,
+          isStreamPage: isStream
+        });
+        
+        // 設定を更新
+        await updateSetting('enabled', isStream);
+        
+        // アプリケーションの状態を更新
+        appState.translationEnabled = isStream;
+        
+        // タブに通知（タブIDが指定されている場合のみ）
+        if (tabId) {
+          try {
+            await chrome.tabs.sendMessage(tabId, {
+              action: 'settingsUpdated',
+              settings: {
+                ...settings,
+                enabled: isStream
+              }
+            });
+            logger.debug('設定更新をタブに通知しました', 'background');
+          } catch (error) {
+            // エラーは無視（タブが閉じられているなど）
+            logger.debug('設定更新の通知に失敗しました', 'background', { error: error.message });
+          }
+        }
+      }
+    }
+  } catch (error) {
+    errorHandler.handleError(error, {
+      source: 'background',
+      code: 'url_change_error',
+      details: 'URL変更処理中にエラーが発生しました'
+    });
+    
+    logger.error('URL変更処理エラー:', 'background', { error: error.message });
+  }
+}
+
+// URL変更のデバウンス処理（500ミリ秒）
+const debouncedUrlChangeHandler = utils.debounce(async (url, tabId) => {
+  await handleUrlChange(url, tabId);
+}, 500);
+
 const messageHandlers = {
   // 翻訳リクエスト
   'translate': async (request, sender, sendResponse) => {
@@ -595,6 +667,33 @@ const messageHandlers = {
         source: 'background',
         code: 'internal_error',
         details: 'ログの取得中にエラーが発生しました'
+      });
+      
+      return { success: false, error: errorInfo.message };
+    }
+  },
+  
+  // URL変更の通知
+  'urlChanged': async (request, sender, sendResponse) => {
+    try {
+      if (!request.url) {
+        return { success: false, error: 'URLが指定されていません' };
+      }
+      
+      logger.debug(`URL変更通知を受信: ${request.url}`, 'background', { 
+        tabId: sender.tab?.id,
+        method: request.method || 'unknown'
+      });
+      
+      // デバウンス処理を呼び出し（応答はすぐに返す）
+      debouncedUrlChangeHandler(request.url, sender.tab?.id);
+      
+      return { success: true };
+    } catch (error) {
+      const errorInfo = errorHandler.handleError(error, {
+        source: 'background',
+        code: 'url_change_error',
+        details: 'URL変更処理中にエラーが発生しました'
       });
       
       return { success: false, error: errorInfo.message };

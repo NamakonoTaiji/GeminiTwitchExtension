@@ -5,6 +5,9 @@
  * 翻訳機能を提供します。
  */
 
+// URL監視モジュールをインポート
+import { initUrlMonitor } from '../utils/urlMonitor.js';
+
 // 設定とデフォルト値
 const DEFAULT_SETTINGS = {
   enabled: true,
@@ -22,9 +25,11 @@ const appState = {
   settings: { ...DEFAULT_SETTINGS },
   processingMessages: new Set(),
   observerActive: false,
+  observer: null,
   channelName: getChannelFromUrl(),
   lastMessageTime: 0,
   debugMode: true, // デバッグモードを有効化
+  urlMonitorInitialized: false // URL監視の初期化状態
 };
 
 // 翻訳済みメッセージのキャッシュ
@@ -83,12 +88,26 @@ async function initializeExtension() {
       }
     }
     
+    // URL監視機能を初期化（まだ初期化されていない場合のみ）
+    if (!appState.urlMonitorInitialized) {
+      initUrlMonitor({
+        onUrlChanged: handleUrlChanged,
+        debug: appState.debugMode,
+        pollingFrequency: 1000 // 1秒ごとのチェック
+      });
+      appState.urlMonitorInitialized = true;
+      debugLog('URL監視機能を初期化しました');
+    }
+    
     // 初期化完了
     appState.initialized = true;
     
     // 拡張機能が有効な場合は既存のメッセージを処理
     if (appState.enabled) {
-      processExistingMessages();
+      // 既存メッセージの処理オプションをチェック
+      if (appState.settings.processExistingMessages) {
+        processExistingMessages();
+      }
       
       // チャット監視を開始
       startChatObserver();
@@ -176,7 +195,7 @@ function startChatObserver() {
   }
 
   // MutationObserverを作成
-  const observer = new MutationObserver((mutations) => {
+  appState.observer = new MutationObserver((mutations) => {
     if (!appState.enabled) return;
 
     debugLog(`変更を検出: ${mutations.length}個の変更`);
@@ -215,7 +234,7 @@ function startChatObserver() {
   });
 
   // 監視を開始
-  observer.observe(chatContainer, { childList: true, subtree: true });
+  appState.observer.observe(chatContainer, { childList: true, subtree: true });
   appState.observerActive = true;
 
   console.log("[Twitch Translator] チャット監視を開始しました");
@@ -538,29 +557,120 @@ function getChannelFromUrl() {
 }
 
 /**
- * ページURLの変更を監視
+ * URL変更ハンドラー
+ * @param {string} url 変更後のURL
+ * @param {string} method 検出方法
  */
-function watchForUrlChanges() {
-  let lastUrl = location.href;
-
-  // 定期的にURLをチェック
-  setInterval(() => {
-    if (location.href !== lastUrl) {
-      lastUrl = location.href;
-
-      // チャンネル名を更新
-      appState.channelName = getChannelFromUrl();
-
-      // 監視を再開
-      appState.observerActive = false;
-      setTimeout(() => {
-        startChatObserver();
-        processExistingMessages();
-      }, 1000);
-
-      console.log("[Twitch Translator] ページが変更されました:", location.href);
+async function handleUrlChanged(url, method) {
+  try {
+    debugLog(`URL変更を検出: ${url} (${method})`);
+    
+    // チャンネル名を取得
+    const newChannelName = getChannelFromUrl();
+    
+    // チャンネルが変わった場合の処理
+    if (newChannelName !== appState.channelName) {
+      console.log(`[Twitch Translator] チャンネル変更を検出: ${appState.channelName} → ${newChannelName} (${method})`);
+      appState.channelName = newChannelName;
+      
+      // グレースピリオドの開始（チャンネル切り替え時の不要な処理を防止）
+      startGracePeriod();
+      
+      // URL判定のためにバックグラウンドに確認
+      const urlCheckResponse = await sendMessageToBackground("checkCurrentUrl", {
+        url: url
+      });
+      
+      if (urlCheckResponse && urlCheckResponse.success) {
+        console.log(`[Twitch Translator] URL判定: ${url} => ${urlCheckResponse.isStreamPage ? '配信ページ' : '非配信ページ'}`);
+        
+        // URL判定に基づいてステータスを更新
+        if (urlCheckResponse.isStreamPage !== appState.enabled) {
+          console.log(`[Twitch Translator] URL判定に基づいて状態を更新: ${urlCheckResponse.isStreamPage ? '有効' : '無効'}に設定`);
+          appState.enabled = urlCheckResponse.isStreamPage;
+          
+          // 監視を再設定
+          resetChatObserver();
+        } else {
+          // 状態は変わらないが、チャンネルが変わったので監視を再設定
+          resetChatObserver();
+        }
+      }
+    } else {
+      // チャンネルは同じだが、ページ内のURLが変わった場合（クリップや設定など）
+      // バックグラウンドに確認して必要に応じて処理
+      const urlCheckResponse = await sendMessageToBackground("checkCurrentUrl", {
+        url: url
+      });
+      
+      if (urlCheckResponse && urlCheckResponse.success) {
+        // URL判定に基づいてステータスを更新（変化があれば）
+        if (urlCheckResponse.isStreamPage !== appState.enabled) {
+          console.log(`[Twitch Translator] 同一チャンネル内でのURL変更による状態更新: ${urlCheckResponse.isStreamPage ? '有効' : '無効'}に設定`);
+          appState.enabled = urlCheckResponse.isStreamPage;
+          
+          // 監視を再設定
+          resetChatObserver();
+        }
+      }
     }
-  }, 2000);
+  } catch (error) {
+    console.error("[Twitch Translator] URL変更処理エラー:", error);
+  }
+}
+
+/**
+ * チャット監視の再設定
+ */
+function resetChatObserver() {
+  // 現在の監視を停止
+  if (appState.observer) {
+    appState.observer.disconnect();
+    appState.observer = null;
+  }
+  
+  appState.observerActive = false;
+  
+  if (appState.enabled) {
+    // 監視を再開（少し遅延させる）
+    setTimeout(() => {
+      startChatObserver();
+      
+      // 既存メッセージの処理（設定が有効な場合のみ）
+      if (appState.settings.processExistingMessages) {
+        processExistingMessages();
+      }
+    }, 1000);
+  }
+}
+
+/**
+ * グレースピリオドを開始
+ * チャンネル切り替え時に不要な処理を防止するための一時的な停止期間
+ */
+function startGracePeriod() {
+  // 現在の監視を停止
+  if (appState.observer) {
+    appState.observer.disconnect();
+    appState.observer = null;
+  }
+  
+  appState.observerActive = false;
+  
+  // 処理中のメッセージをクリア
+  appState.processingMessages.clear();
+  
+  debugLog('グレースピリオドを開始しました');
+  
+  // 3秒後にグレースピリオドを終了
+  setTimeout(() => {
+    debugLog('グレースピリオドが終了しました');
+    
+    // 有効な場合は監視を再開
+    if (appState.enabled) {
+      startChatObserver();
+    }
+  }, 3000);
 }
 
 /**
@@ -597,8 +707,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 console.log("[Twitch Translator] コンテンツローダーを起動します");
 initializeExtension();
 
-// URL変更監視を開始
-watchForUrlChanges();
+// URL変更監視はURLMonitorで行うため、この行は削除
 
 // 初期化が失敗した場合のフォールバック
 setTimeout(() => {
