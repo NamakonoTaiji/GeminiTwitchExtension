@@ -23,7 +23,10 @@ import {
   createMutationObserver,
   getMessageElement,
   getMessageId,
-  createUrlChangeDetector
+  createUrlChangeDetector,
+  createAdvancedUrlChangeDetector,
+  isTwitchChannelPage,
+  extractChannelName
 } from '../utils/domObserver.js';
 
 import {
@@ -57,15 +60,36 @@ let settings = getDefaultSettings();
 // 翻訳済みコメントを追跡するMap
 const translatedComments = new Map();
 
-// URLの変更を監視するためのデテクタを作成
-const urlChangeDetector = createUrlChangeDetector((previousUrl, currentUrl) => {
-  // チャンネル変更関連のフラグをセット
-  setChannelChangedFlag(true);
-  console.log("チャンネル変更フラグと既存メッセージ処理禁止フラグをセットしました");
-  
-  // デバウンスされた処理を呼び出し
-  debouncedChannelChangeNotify(previousUrl, currentUrl);
-});
+// URLの変更を監視するための高度なデテクタを作成
+const urlChangeDetector = createAdvancedUrlChangeDetector(
+  (previousUrl, currentUrl, source) => {
+    console.log(`URL変更を検出: ${source}による変更 [${previousUrl} -> ${currentUrl}]`);
+    
+    // 新しいURLがチャンネルページかどうかを判定
+    const isChannelPage = isTwitchChannelPage(currentUrl);
+    
+    if (isChannelPage) {
+      // チャンネルページの場合のみ、チャンネル変更処理を実行
+      setChannelChangedFlag(true);
+      console.log("チャンネルページへの移動を検出しました");
+      console.log("チャンネル変更フラグと既存メッセージ処理禁止フラグをセットしました");
+      debouncedChannelChangeNotify(previousUrl, currentUrl);
+    } else {
+      // 非チャンネルページの場合は監視を停止
+      console.log("非チャンネルページへの移動を検出しました。チャット監視を停止します");
+      stopObserving();
+    }
+  },
+  {
+    // URL監視オプション
+    checkInterval: 2000,       // 2秒間隔でポーリング
+    useHistoryApi: true,       // History APIのオーバーライドを有効化
+    useHashChange: true,       // ハッシュ変更イベントを監視
+    usePopState: true,         // ブラウザの戻るボタン等のイベントを監視
+    comparePathOnly: true,     // パス部分のみを比較（クエリパラメータやハッシュが変わるだけでは検出しない）
+    debug: false               // デバッグ情報は表示しない
+  }
+);
 
 // チャンネル切り替え時の処理
 function handleChannelChange(prevUrl, currentUrl) {
@@ -77,9 +101,30 @@ function handleChannelChange(prevUrl, currentUrl) {
   }
 
   // チャンネル名を抽出して記録
-  const oldChannel = prevUrl.match(/twitch\.tv\/(\w+)/)?.[1] || "不明";
-  const newChannel = currentUrl.match(/twitch\.tv\/(\w+)/)?.[1] || "不明";
+  const oldChannel = extractChannelName(prevUrl) || "不明";
+  const newChannel = extractChannelName(currentUrl) || "不明";
   console.log(`チャンネル変更: ${oldChannel} -> ${newChannel}`);
+  
+  // URLの詳細情報をログ出力（高度なURL監視デテクタの機能を使用）
+  if (urlChangeDetector && typeof urlChangeDetector.getUrlParts === 'function') {
+    // 新しいURL情報を取得
+    const urlInfo = urlChangeDetector.getUrlParts();
+    console.log('新しいURL詳細情報:', {
+      path: urlInfo.path,
+      query: urlInfo.query,
+      hash: urlInfo.hash,
+      host: urlInfo.host
+    });
+  }
+  
+  // 現在のページがチャンネルページかどうか判定
+  const isChannelPage = isTwitchChannelPage(currentUrl);
+  console.log(`ページタイプ: ${isChannelPage ? 'チャンネルページ' : '非チャンネルページ'}`);
+  
+  if (!isChannelPage) {
+    console.log('チャンネルページではないため、チャット監視はスキップします');
+    return; // チャンネルページでない場合は処理を終了
+  }
 
   // チャンネル切り替え関連フラグを設定
   setChannelChangedFlag(true);
@@ -149,8 +194,20 @@ const debouncedReinitialize = debounce(async () => {
   console.log("デバウンス: 拡張機能の再初期化を開始...");
 
   // 現在のチャンネル情報をログ出力
-  const currentChannel = location.href.match(/twitch\.tv\/(\w+)/)?.[1] || "不明";
+  const currentUrl = location.href;
+  const currentChannel = extractChannelName(currentUrl) || "不明";
+  const isChannelPage = isTwitchChannelPage(currentUrl);
+  
+  console.log(`現在のURL: ${currentUrl}`);
+  console.log(`ページタイプ: ${isChannelPage ? 'チャンネルページ' : '非チャンネルページ'}`);  
   console.log(`現在のチャンネル: ${currentChannel}`);
+  
+  // 非チャンネルページの場合は監視を停止
+  if (!isChannelPage) {
+    console.log('非チャンネルページのため、チャット監視は行いません');
+    stopObserving();
+    return; // 非チャンネルページの場合はここで終了
+  }
 
   // 設定を再読み込み
   await updateSettings();
@@ -259,8 +316,11 @@ async function initialize() {
   try {
     // ページのURLからチャンネル情報を取得してログに記録
     const currentUrl = location.href;
-    const currentChannel = currentUrl.match(/twitch\.tv\/(\w+)/)?.[1] || "チャンネル不明";
+    const currentChannel = extractChannelName(currentUrl) || "チャンネル不明";
+    const isChannelPage = isTwitchChannelPage(currentUrl);
+    
     console.log(`現在のTwitchページ: ${currentUrl}`);
+    console.log(`ページタイプ: ${isChannelPage ? 'チャンネルページ' : '非チャンネルページ'}`);
     console.log(`チャンネル名: ${currentChannel}`);
 
     // バックグラウンドスクリプトから設定を取得
@@ -269,7 +329,7 @@ async function initialize() {
     isEnabled = settings.enabled;
     apiKeySet = !!settings.apiKey;
 
-    console.log(`設定を読み込みました: 有効=${isEnabled}, APIキー設定済み=${apiKeySet}`);
+    console.log(`設定を読み込みました: 有効=${isEnabled}, APIキー設定済み=${apiKeySet ? "設定済み" : "未設定"}`);
     console.log("翻訳モード:", settings.translationMode);
     console.log("既存メッセージ処理:", settings.processExistingMessages ? "有効" : "無効");
 
@@ -282,6 +342,7 @@ async function initialize() {
         {
           action: "contentScriptInitialized",
           enabled: isEnabled,
+          isChannelPage: isChannelPage
         },
         (response) => {
           if (chrome.runtime.lastError) {
@@ -295,9 +356,15 @@ async function initialize() {
       logError("初期化通知失敗", notifyError);
     }
 
-    // 有効かつAPIキーがある場合は監視開始
-    if (isEnabled && apiKeySet) {
+    // 有効かつAPIキーがある場合、さらにチャンネルページの場合のみ監視開始
+    if (isEnabled && apiKeySet && isChannelPage) {
       debouncedStartObserving();
+    } else if (!isChannelPage) {
+      console.log("現在のページはチャンネルページではないため、チャット監視は開始しません");
+    } else if (!isEnabled) {
+      console.log("機能が無効なため、チャット監視は開始しません");
+    } else {
+      console.log("APIキーが設定されていないため、チャット監視は開始しません");
     }
   } catch (error) {
     logError("設定読み込みエラー", error);
@@ -403,6 +470,15 @@ async function getSettings() {
 // チャットコンテナを検索して監視開始
 function findAndObserveChatContainer() {
   console.log("Twitchチャットコンテナを検索中...");
+
+  // 現在のページがチャンネルページか確認
+  const currentUrl = location.href;
+  const isChannelPage = isTwitchChannelPage(currentUrl);
+  
+  if (!isChannelPage) {
+    console.log('現在のページはチャンネルページではないため、チャットコンテナ検索を中止します');
+    return false;
+  }
 
   // メインのチャットコンテナセレクタ
   const chatContainer = findChatContainer();
@@ -663,8 +739,44 @@ function stopObserving() {
     console.log("Twitchチャットの監視を停止しました");
   }
 
-  // URL変更検出は継続 (これは停止しない)
-  console.log("URL変更検出は継続中です");
+  // 翻訳キャッシュをクリア
+  if (translatedComments.size > 0) {
+    const cacheSize = translatedComments.size;
+    translatedComments.clear();
+    console.log(`翻訳キャッシュをクリアしました（${cacheSize}件）`);
+  }
+  
+  // グレースピリオドタイマーをクリア
+  if (gracePeriodTimer) {
+    clearTimeout(gracePeriodTimer);
+    gracePeriodTimer = null;
+    console.log("グレースピリオドタイマーをクリアしました");
+  }
+  
+  // グレースピリオド状態をリセット
+  if (isInGracePeriod()) {
+    setGracePeriodState(false);
+    console.log("グレースピリオド状態をリセットしました");
+  }
+
+  // URL監視は継続
+  if (urlChangeDetector && typeof urlChangeDetector.isActive === 'function' && !urlChangeDetector.isActive()) {
+    // URL監視が停止していた場合は再開始
+    urlChangeDetector.start();
+    console.log("URL変更監視を再開始しました");
+  } else {
+    console.log("URL変更検出は継続中です");
+  }
+  
+  // チャンネル変更フラグをクリアするかどうかを判断
+  const currentUrl = location.href;
+  const isChannelPage = isTwitchChannelPage(currentUrl);
+  
+  if (!isChannelPage && hasChannelChanged()) {
+    // 非チャンネルページに移動した場合はフラグをクリア
+    removeSessionFlag("twitch_gemini_channel_changed");
+    console.log("非チャンネルページのため、チャンネル変更フラグをクリアしました");
+  }
 }
 
 // コンテキスト無効化時の処理 - これもデバウンス
@@ -949,6 +1061,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   setTimeout(() => {
     // カウンタをリセット
     manageRetryCounter(true);
+    
+    // URL変更監視の状態を確認
+    if (urlChangeDetector && typeof urlChangeDetector.isActive === 'function' && !urlChangeDetector.isActive()) {
+      console.log('URL変更監視が非アクティブです。再開始します。');
+      urlChangeDetector.start();
+    }
+    
+    // URL監視の現在の情報をログ出力
+    if (urlChangeDetector && typeof urlChangeDetector.getUrlParts === 'function') {
+      const urlInfo = urlChangeDetector.getUrlParts();
+      console.log('現在のURL情報:', urlInfo);
+    }
+    
     checkExtensionContext();
   }, 5000); // 初回の確認は5秒後
 })();
